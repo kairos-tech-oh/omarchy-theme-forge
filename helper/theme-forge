@@ -21,7 +21,9 @@
 #   thumb <path>             a bounded downscale into the scratch directory
 #   wallpaper <name>         draw a background from the palette on stdin
 #   adopt <name> <path>      copy a probed image in as the theme's background
-#   save <name>              write colors.toml, read from stdin
+#   save <name> [--wip]      write colors.toml, read from stdin
+#   list-wip                 the in-progress theme names
+#   discard-wip <name>       remove an in-progress theme, once it has been kept
 #   apply <name>             omarchy-theme-set
 #   list                     the user's own theme names
 #   locked                   the user themes this refuses to write to, and why
@@ -89,6 +91,12 @@ WALLPAPER_HEIGHT=2160
 OMARCHY_ROOT="${OMARCHY_PATH:-/usr/share/omarchy}"
 THEMES_DIR="$HOME/.config/omarchy/themes"
 STATE_DIR="$HOME/.local/state/kairos.theme-forge"
+
+# In-progress themes live here rather than in ~/.config/omarchy/themes, and that
+# is the whole mechanism: omarchy-theme-list enumerates the themes directory, so
+# a theme kept outside it simply never appears in the switcher. Same layout, same
+# colors.toml, same backgrounds -- just somewhere Omarchy does not look.
+WIP_DIR="$STATE_DIR/wip"
 CURRENT_NAME_FILE="$HOME/.local/state/omarchy/current/theme.name"
 
 SELF_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
@@ -107,6 +115,15 @@ if [[ ${1:-} == "--budget" ]]; then
   shift 2
 fi
 STARTED_AT=$(date +%s)
+
+# `--wip` may follow the subcommand's own arguments; pull it out wherever it is
+# so each command can just ask.
+WIP=0
+ARGS=()
+for arg in "$@"; do
+  if [[ $arg == "--wip" ]]; then WIP=1; else ARGS+=("$arg"); fi
+done
+set -- ${ARGS+"${ARGS[@]}"}
 
 # Seconds left in this invocation's budget.
 #
@@ -270,9 +287,25 @@ require_name() {
 
 # Everything above, plus the three things that make a name valid but not ours to
 # write to.
+# Where a theme of this name lives, given the mode.
+theme_root() {
+  if (( WIP )); then printf '%s' "$WIP_DIR"; else printf '%s' "$THEMES_DIR"; fi
+}
+
 require_writable_theme() {
   local name dir
   name=$(require_name "${1:-}") || exit $?
+
+  # An in-progress theme lives inside this plugin's own state directory, which
+  # it created and verified. None of the three refusals below can apply there --
+  # Omarchy ships nothing into it, nothing clones into it, and a symlink in it
+  # would be ours. Guarding the directory itself is state_dir's job.
+  if (( WIP )); then
+    require_dir "$WIP_DIR"
+    printf '%s' "$name"
+    return 0
+  fi
+
   dir="$THEMES_DIR/$name"
 
   if [[ -d "$OMARCHY_ROOT/themes/$name" ]]; then
@@ -419,7 +452,8 @@ cmd_wallpaper() {
   read_palette_stdin || refuse "the palette on stdin was incomplete"
 
   bin=$(magick_bin) || refuse "ImageMagick is not installed" "$EXIT_NO_TOOL"
-  dir="$THEMES_DIR/$name/backgrounds"
+  dir="$(theme_root)/$name/backgrounds"
+  require_dir "$(theme_root)/$name"
   require_dir "$dir"
   out="$dir/0-$name.jpg"
   tmp="$dir/.0-$name.jpg.new"
@@ -489,7 +523,8 @@ cmd_adopt() {
   timeout "$(remaining)" python3 "$READER" probe "$path" >/dev/null || exit $?
 
   bin=$(magick_bin) || refuse "ImageMagick is not installed" "$EXIT_NO_TOOL"
-  dir="$THEMES_DIR/$name/backgrounds"
+  dir="$(theme_root)/$name/backgrounds"
+  require_dir "$(theme_root)/$name"
   require_dir "$dir"
   out="$dir/0-$name.jpg"
   tmp="$dir/.0-$name.jpg.new"
@@ -541,7 +576,7 @@ cmd_save() {
     toml_line_ok "$line" || refuse "refusing to write a colors.toml containing: $line"
   done <<<"$body"
 
-  dir="$THEMES_DIR/$name"
+  dir="$(theme_root)/$name"
   require_dir "$dir"
   require_dir "$dir/backgrounds"
   tmp="$dir/.colors.toml.new"
@@ -574,6 +609,27 @@ cmd_list() {
 # before it offers. Same two rules require_writable_theme enforces: a theme
 # cloned from a git repository came from someone else, and a symlinked one is a
 # working copy living somewhere this has no business writing through.
+cmd_list_wip() {
+  [[ -d $WIP_DIR ]] || exit 0
+  run_bounded "$LIST_CAP" find "$WIP_DIR" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' \
+    || refuse "could not list your in-progress themes"
+  say "$BOUNDED_OUT"
+}
+
+# Removing an in-progress theme once it has been kept as a real one. The only
+# rm -rf in this plugin, and it is bounded three ways: the name has passed the
+# whitelist, the parent is this plugin's own verified state directory, and the
+# target has to actually be a directory that is not a symlink.
+cmd_discard_wip() {
+  local name dir
+  name=$(require_name "${1:-}") || exit $?
+  dir="$WIP_DIR/$name"
+  [[ -d $dir && ! -L $dir ]] || exit 0
+  [[ -O $dir ]] || refuse "$dir is not yours"
+  rm -rf -- "$dir"
+  say "$name"
+}
+
 cmd_locked() {
   local name
   while IFS= read -r name; do
@@ -599,7 +655,8 @@ cmd_current() {
 cmd_load() {
   local name path
   name=$(require_name "${1:-}") || exit $?
-  path="$THEMES_DIR/$name/colors.toml"
+  path="$(theme_root)/$name/colors.toml"
+  [[ -f $path ]] || path="$THEMES_DIR/$name/colors.toml"
   [[ -f $path ]] || path="$OMARCHY_ROOT/themes/$name/colors.toml"
   need_tool python3
   timeout "$(remaining)" python3 "$READER" read "$path" "$TOML_CAP"
@@ -663,6 +720,8 @@ case "$command" in
   apply)      cmd_apply "$@" ;;
   list)       cmd_list "$@" ;;
   locked)     cmd_locked "$@" ;;
+  list-wip)   cmd_list_wip "$@" ;;
+  discard-wip) cmd_discard_wip "$@" ;;
   stock)      cmd_stock "$@" ;;
   current)    cmd_current "$@" ;;
   load)       cmd_load "$@" ;;

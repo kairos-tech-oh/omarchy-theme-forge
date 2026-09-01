@@ -272,9 +272,10 @@ o.window({ class = "org.quickshell", title = "^Theme Forge$" }, {
 | Key | |
 |---|---|
 | `Ctrl+R` | roll a new palette |
+| `Ctrl+P` | open the colour wheel on the selected swatch |
 | `Ctrl+S` | save |
 | `Ctrl+Enter` | save **and** apply |
-| `Esc` | close |
+| `Esc` | close (or close the colour wheel, if it is open) |
 
 ### Mode
 
@@ -306,6 +307,11 @@ Twenty-six colours come out of three, plus mode and chroma:
 Click any swatch in the grid to bring it under the **HUE / SAT / LIGHT**
 sliders, or type a hex into the field. Move `background` and the whole palette
 re-solves against the new ground while you drag.
+
+**Click the big swatch** next to the hex field — or press `Ctrl+P` — for a
+colour wheel: a hue ring around a saturation/lightness square. It is HSL rather
+than the HSV most wheels use, so it agrees with the sliders beside it about what
+every number means.
 
 You will sometimes see the LIGHT slider settle somewhere other than where you
 let go. That is the contrast solver overruling you, and the slider showing you
@@ -364,6 +370,22 @@ Add more later by dropping files into that folder; Omarchy cycles through them.
 
 ### Saving, applying, reverting
 
+### In progress, or a theme
+
+**SAVE AS** under the name field decides where a save lands:
+
+| | |
+|---|---|
+| **a theme** | `~/.config/omarchy/themes/<name>/`. Shows up in your theme switcher, and can be applied. |
+| **in progress** | `~/.local/state/kairos.theme-forge/wip/<name>/`. A real theme directory with a real `colors.toml` and background — Omarchy simply never looks there, so it stays out of the switcher until you are happy with it. |
+
+Both write the same files. The only difference is the shelf.
+
+Saving an in-progress theme **as a theme** finishes it: the button reads
+**Finish it**, and the in-progress copy is cleared afterwards so the two cannot
+drift apart. **Save and apply** is off while you are in in-progress mode, since
+an in-progress theme is deliberately not something Omarchy can be told to wear.
+
 | | |
 |---|---|
 | **Save** | Writes `colors.toml` and the background. Changes nothing on your desktop. |
@@ -381,8 +403,11 @@ Three names it will refuse, and says so as you type:
 
 ### Opening a theme you already have
 
-The **OPEN** row lists your themes; `theme-forge edit <name>` opens any of them,
-including the stock ones. Every colour arrives pinned, so what you see is
+The **OPEN** row lists your own themes, with anything in progress marked in
+yellow. **Start from an Omarchy theme** unfolds the twenty-odd themes Omarchy
+ships — opening one is the best way to begin from something known, and to see
+the numbers behind a palette you already like. `theme-forge edit <name>` opens
+any of them from a terminal. Every colour arrives pinned, so what you see is
 exactly what is on disk rather than a re-derivation. Roll, unpin, or edit from
 there — and give it a new name if the original is one of the three above.
 
@@ -590,6 +615,7 @@ needs restarting.
 | the plugin | `~/.config/omarchy/plugins/kairos.theme-forge/` |
 | themes you make | `~/.config/omarchy/themes/<name>/` |
 | the draft | `~/.local/state/kairos.theme-forge/draft.json` |
+| in-progress themes | `~/.local/state/kairos.theme-forge/wip/<name>/` |
 | preview thumbnails | `$XDG_RUNTIME_DIR/kairos-theme-forge/` |
 
 ---
@@ -609,7 +635,7 @@ is deliberate — your themes are yours. To clean up as well:
 
 ```sh
 ls ~/.config/omarchy/themes/            # check before removing anything
-rm -rf ~/.local/state/kairos.theme-forge
+rm -rf ~/.local/state/kairos.theme-forge     # includes in-progress themes
 rm -rf "${XDG_RUNTIME_DIR:-$HOME/.cache}/kairos-theme-forge"
 ```
 

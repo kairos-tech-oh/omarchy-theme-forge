@@ -92,6 +92,33 @@ stock bar without replacing any of it.
 Nothing in any of the three reads external input. They take colours and numbers
 from the panel and paint.
 
+## In-progress themes
+
+Two shelves, one format. A theme saved as *in progress* is a real theme
+directory — same `colors.toml`, same `backgrounds/` — written to
+`~/.local/state/kairos.theme-forge/wip/<name>/` instead of
+`~/.config/omarchy/themes/`. That is the entire mechanism: `omarchy-theme-list`
+enumerates the themes directory, so a theme kept outside it never appears in the
+switcher. Nothing is hidden, marked, or specially formatted; it is just
+somewhere Omarchy does not look.
+
+The three refusals (`stock name`, `installed from a repo`, `symlinked working
+copy`) do not apply on the in-progress shelf and are skipped there deliberately:
+that directory is inside this plugin's own state directory, which `state_dir`
+creates and verifies, and Omarchy ships nothing into it.
+
+`discard-wip` is the only `rm -rf` in the plugin. It is bounded three ways: the
+name has passed the same whitelist as every other name, the parent is that
+verified state directory, and the target must be a real directory that is not a
+symlink and is owned by the user. It runs in exactly one place — after a theme
+has successfully been saved to the real themes directory under a name that was
+in progress, which is what "finishing" one means.
+
+The save mode is captured once when a save starts rather than read at each step
+of the chain. The chain is three subprocesses deep and the user can flip the
+selector while a background is rendering; a save that began as one kind must not
+finish as the other.
+
 ## The shipped command
 
 `cli/theme-forge` is a front end for `omarchy-shell`'s IPC, not a second way to

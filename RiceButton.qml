@@ -66,6 +66,15 @@ Item {
     bordered: false
     background: "transparent"
 
+    // Button is a BorderSurface, and its radius defaults to Style.cornerRadius,
+    // which mirrors Hyprland's `decoration:rounding` -- 0 on a sharp-cornered
+    // setup. Left alone, the hover fill and the hover border it paints came out
+    // as a square sitting inside a rounded pill. It has to be told the shape it
+    // is decorating, because the shape is this component's choice and not the
+    // compositor's.
+    radius: Math.max(0, Math.min(root.cornerRadius,
+                                 Math.round(Math.min(width, height) / 2)))
+
     text: root.text
     tooltipText: root.tooltipText
     selected: root.selected

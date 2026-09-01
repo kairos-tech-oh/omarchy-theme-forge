@@ -75,6 +75,7 @@ Item {
     // Refreshed on every open rather than cached: themes can be installed,
     // removed and switched while this window is closed.
     listProc.running = true
+    wipListProc.running = true
     lockedProc.running = true
     stockProc.running = true
     currentProc.running = true
@@ -261,6 +262,7 @@ Item {
   property real surfaceAlpha: 0.90
   property bool tutorialOpen: false
   property string page: "design"     // design | settings
+  property bool wheelOpen: false
 
   function setPref(key, value) {
     if (key === "showTutorialOnOpen") root.showTutorialOnOpen = value === true
@@ -346,6 +348,14 @@ Item {
   // can say so *before* Save, rather than the UI promising an overwrite the
   // helper then turns down.
   property var lockedThemes: []
+  // In-progress themes. Real theme directories with a real colors.toml, kept
+  // outside ~/.config/omarchy/themes so omarchy-theme-list never enumerates
+  // them -- which is the whole of why they stay out of the switcher.
+  property var wipThemes: []
+
+  // "theme" writes something Omarchy can wear; "wip" parks it out of sight.
+  property string saveMode: "theme"
+  readonly property bool savingWip: saveMode === "wip"
   property string currentTheme: ""
   property string themeAtOpen: ""
 
@@ -359,6 +369,10 @@ Item {
     var name = Sanitise.themeName(raw)
     if (name === "") return "Lowercase letters, numbers and dashes, up to 32 characters."
     if (root.stockThemes.indexOf(name) !== -1) return "Omarchy already ships a theme called " + name + "."
+    // None of the three refusals below apply to an in-progress theme: it is
+    // written inside this plugin's own state directory, where Omarchy ships
+    // nothing and nothing is cloned.
+    if (root.savingWip) return ""
     if (root.lockedThemes.indexOf(name) !== -1)
       return name + " was installed from a repository, so it is not this plugin's to overwrite."
     return ""
@@ -366,8 +380,17 @@ Item {
 
   function overwrites() {
     var name = Sanitise.themeName(root.themeName)
-    return name !== "" && root.userThemes.indexOf(name) !== -1
-      && root.lockedThemes.indexOf(name) === -1
+    if (name === "") return false
+    if (root.savingWip) return root.wipThemes.indexOf(name) !== -1
+    return root.userThemes.indexOf(name) !== -1 && root.lockedThemes.indexOf(name) === -1
+  }
+
+  // Saving as a real theme a name that is currently in progress is what
+  // "finishing" one means, so the in-progress copy goes afterwards rather than
+  // being left to drift out of step with the theme it became.
+  function promoting() {
+    var name = Sanitise.themeName(root.themeName)
+    return !root.savingWip && name !== "" && root.wipThemes.indexOf(name) !== -1
   }
 
   // -------------------------------------------------------- the background
@@ -429,7 +452,8 @@ Item {
     draftSaveProc.payload = JSON.stringify({
       spec: root.spec,
       themeName: Sanitise.themeName(root.themeName),
-      sourceImage: root.sourceImage
+      sourceImage: root.sourceImage,
+      saveMode: root.saveMode
     })
     draftSaveProc.stdinEnabled = true
     draftSaveProc.running = true
@@ -447,6 +471,7 @@ Item {
     root.spec = Palette.normSpec(data.spec)
     var name = Sanitise.themeName(data.themeName)
     if (name !== "") root.themeName = name
+    if (data.saveMode === "wip" || data.saveMode === "theme") root.saveMode = data.saveMode
     // The picked image is re-probed and re-thumbnailed rather than trusted from
     // the draft: the path is a string in a file, and the file it names may have
     // changed or gone since it was written.
@@ -466,6 +491,14 @@ Item {
   // cheerfully apply.
 
   property bool applyAfterSave: false
+  property bool savingWipRun: false
+  property bool promotingRun: false
+
+  // `--wip` is a flag the helper pulls out of the argument list wherever it is,
+  // so appending it is enough.
+  function modeArgs(args) {
+    return root.savingWipRun ? args.concat(["--wip"]) : args
+  }
 
   function save(thenApply) {
     var problem = root.nameProblem()
@@ -476,9 +509,15 @@ Item {
     if (root.busy) return
     root.applyAfterSave = thenApply === true
     root.busy = true
-    root.setStatus("Writing " + Sanitise.themeName(root.themeName) + "...", "info")
+    // The mode is captured for the whole chain here rather than read at each
+    // step: the user can flip the selector while a background is rendering, and
+    // a save that started as one kind must not finish as the other.
+    root.savingWipRun = root.savingWip
+    root.promotingRun = root.promoting()
+    root.setStatus((root.savingWipRun ? "Parking " : "Writing ")
+      + Sanitise.themeName(root.themeName) + "...", "info")
     saveProc.payload = Palette.toToml(root.colors, Sanitise.themeName(root.themeName))
-    saveProc.command = root.helperCommand("save", [Sanitise.themeName(root.themeName)], 20)
+    saveProc.command = root.helperCommand("save", root.modeArgs([Sanitise.themeName(root.themeName)]), 20)
     saveProc.stdinEnabled = true
     saveProc.running = true
   }
@@ -487,7 +526,7 @@ Item {
     var name = Sanitise.themeName(root.themeName)
     if (root.sourceImage !== "" && root.imagesUsable()) {
       root.setStatus("Fitting your image to the desktop...", "info")
-      adoptProc.command = root.helperCommand("adopt", [name, root.sourceImage], 60)
+      adoptProc.command = root.helperCommand("adopt", root.modeArgs([name, root.sourceImage]), 60)
       adoptProc.running = true
       return
     }
@@ -496,17 +535,39 @@ Item {
                              "background=" + root.colors.background,
                              "darker_background=" + root.colors.darker_background,
                              "accent=" + root.colors.accent].join("\n")
-    wallpaperProc.command = root.helperCommand("wallpaper", [name], 60)
+    wallpaperProc.command = root.helperCommand("wallpaper", root.modeArgs([name]), 60)
     wallpaperProc.stdinEnabled = true
     wallpaperProc.running = true
   }
 
   function finishSave() {
     var name = Sanitise.themeName(root.themeName)
+
+    if (root.savingWipRun) {
+      if (root.wipThemes.indexOf(name) === -1) {
+        var wips = root.wipThemes.slice()
+        wips.push(name)
+        root.wipThemes = wips
+      }
+      root.busy = false
+      root.setStatus("Kept " + name + " in progress. It stays out of your theme switcher.", "ok")
+      return
+    }
+
     if (root.userThemes.indexOf(name) === -1) {
       var next = root.userThemes.slice()
       next.push(name)
       root.userThemes = next
+    }
+    // It was in progress and now it is a theme, so the draft copy goes rather
+    // than sitting there drifting out of step with what it became.
+    if (root.promotingRun) {
+      discardWipProc.command = root.helperCommand("discard-wip", [name], 15)
+      discardWipProc.running = true
+      var remaining = []
+      for (var i = 0; i < root.wipThemes.length; i++)
+        if (root.wipThemes[i] !== name) remaining.push(root.wipThemes[i])
+      root.wipThemes = remaining
     }
     if (root.applyAfterSave) {
       root.applyAfterSave = false
@@ -516,7 +577,9 @@ Item {
       return
     }
     root.busy = false
-    root.setStatus("Saved " + name + ". Apply it, or keep going.", "ok")
+    root.setStatus(root.promotingRun
+      ? "Saved " + name + " as a theme and cleared its in-progress copy."
+      : "Saved " + name + ". Apply it, or keep going.", "ok")
   }
 
   function revert() {
@@ -533,13 +596,15 @@ Item {
   }
 
   // Open an existing theme so it can be edited rather than rebuilt.
-  function loadTheme(name) {
+  function loadTheme(name, source) {
     var clean = Sanitise.themeName(name)
     if (clean === "") return
+    var wip = source === "wip"
     root.busy = true
     root.setStatus("Opening " + clean + "...", "info")
     loadProc.themeName = clean
-    loadProc.command = root.helperCommand("load", [clean], 15)
+    loadProc.wasWip = wip
+    loadProc.command = root.helperCommand("load", wip ? [clean, "--wip"] : [clean], 15)
     loadProc.running = true
   }
 
@@ -581,6 +646,16 @@ Item {
     id: listProc
     command: [root.helperPath, "list"]
     stdout: StdioCollector { waitForEnd: true; onStreamFinished: root.userThemes = Sanitise.nameList(text) }
+  }
+
+  Process {
+    id: wipListProc
+    command: [root.helperPath, "list-wip"]
+    stdout: StdioCollector { waitForEnd: true; onStreamFinished: root.wipThemes = Sanitise.nameList(text) }
+  }
+
+  Process {
+    id: discardWipProc
   }
 
   Process {
@@ -804,6 +879,7 @@ Item {
   Process {
     id: loadProc
     property string themeName: ""
+    property bool wasWip: false
     property string outText: ""
     stdout: StdioCollector { waitForEnd: true; onStreamFinished: loadProc.outText = text }
     onExited: function (exitCode) {
@@ -813,6 +889,10 @@ Item {
       if (!loaded) { root.setStatus("That theme has no colours this can read.", "error"); return }
       root.setSpec(loaded)
       root.themeName = loadProc.themeName
+      // Opening an in-progress theme puts the save mode back where it was, so
+      // pressing Save does what it did last time rather than quietly promoting
+      // something that was meant to stay put.
+      root.saveMode = loadProc.wasWip ? "wip" : "theme"
       root.sourceImage = ""
       root.previewImage = ""
       // What happens on Save depends on where the theme came from, and saying
@@ -866,6 +946,7 @@ Item {
                                            Color.menu.background.b,
                                            root.surfaceAlpha)
   readonly property color ink: Color.menu.text
+  readonly property color accentColor: Color.accent
   readonly property color dim: Qt.rgba(ink.r, ink.g, ink.b, 0.55)
   readonly property color faint: Qt.rgba(ink.r, ink.g, ink.b, 0.28)
   readonly property color hairline: Qt.rgba(ink.r, ink.g, ink.b, 0.12)
@@ -911,7 +992,11 @@ Item {
       // here are the chords and Escape, which no field consumes.
       Keys.onPressed: function (event) {
         if (event.key === Qt.Key_Escape) {
-          root.requestClose()
+          if (root.wheelOpen) root.wheelOpen = false
+          else root.requestClose()
+          event.accepted = true
+        } else if ((event.modifiers & Qt.ControlModifier) && event.key === Qt.Key_P) {
+          root.wheelOpen = !root.wheelOpen
           event.accepted = true
         } else if ((event.modifiers & Qt.ControlModifier) && event.key === Qt.Key_R) {
           root.roll()
@@ -976,7 +1061,7 @@ Item {
               // The first thing to go when the window is narrow: the shortcuts
               // are a reminder, and colliding with the title helps nobody.
               visible: header.width - titleRow.width - headerRight.width + width > Style.space(24)
-              text: "CTRL+R ROLL   CTRL+S SAVE   CTRL+ENTER APPLY   ESC CLOSE"
+              text: "CTRL+R ROLL   CTRL+P PICK   CTRL+S SAVE   CTRL+ENTER APPLY   ESC CLOSE"
               textFormat: Text.PlainText
               color: root.faint
               font.family: root.uiFont
@@ -1134,25 +1219,61 @@ Item {
             }
 
             RiceButton {
-              text: root.overwrites() ? "Overwrite" : "Save"
+              text: root.savingWip
+                ? (root.overwrites() ? "Update draft" : "Keep in progress")
+                : (root.promoting() ? "Finish it" : (root.overwrites() ? "Overwrite" : "Save"))
               enabled: !root.busy
-              foreground: root.ink
+              foreground: root.savingWip ? root.colors.yellow : root.ink
+              accent: root.savingWip ? root.colors.yellow : root.accentColor
+              selected: root.savingWip
               tint: root.surface
               fillAlpha: root.surfaceAlpha
+              tooltipText: root.savingWip
+                ? "Writes a real theme file somewhere Omarchy will not list it"
+                : (root.promoting() ? "Save it as a theme and clear the in-progress copy" : "")
               onClicked: root.save(false)
             }
 
             RiceButton {
+              // An in-progress theme is deliberately not something Omarchy can
+              // be told to wear, so this is the one button that has to go quiet
+              // in that mode -- with the reason attached rather than just
+              // greying out.
               text: "Save and apply"
-              enabled: !root.busy
+              enabled: !root.busy && !root.savingWip
               foreground: root.colors.accent
               accent: root.colors.accent
-              selected: true
+              selected: !root.savingWip
               tint: root.surface
               fillAlpha: root.surfaceAlpha
+              tooltipText: root.savingWip
+                ? "In-progress themes stay out of the switcher. Switch to \u201ca theme\u201d to apply this one."
+                : ""
               onClicked: root.save(true)
             }
           }
+        }
+
+        // ------------------------------------------------------- the colour wheel
+        //
+        // Loaded on demand and destroyed on close, like the tour: a Canvas that
+        // paints 360 arcs has no business sitting in the scene graph for a
+        // session in which nobody opened it.
+        Loader {
+          id: wheelLoader
+          anchors.fill: parent
+          anchors.margins: -Style.spacing.panelPadding
+          active: root.wheelOpen && root.page === "design"
+          z: 40
+          sourceComponent: ColorWheel {
+            forge: root
+            hex: root.colors[root.selectedKey] !== undefined
+              ? String(root.colors[root.selectedKey]) : "#000000"
+            onPicked: function (hex) { root.setColor(root.selectedKey, hex) }
+            onClosed: root.wheelOpen = false
+          }
+          onLoaded: item.forceActiveFocus()
+          onActiveChanged: if (!active) keyCatcher.forceActiveFocus()
         }
 
         // ------------------------------------------------------------- the tour
@@ -1188,9 +1309,14 @@ Item {
                         tourLoader.pad + body.y + previewPane.y,
                         previewPane.width, previewPane.height)
               : Qt.rect(0, 0, 0, 0)
-            actionsRect: Qt.rect(tourLoader.pad + footer.x + actions.x,
-                                 tourLoader.pad + footer.y + actions.y,
-                                 actions.width, actions.height)
+            // The whole footer strip, not just the button row. A thin band of
+            // three buttons at the bottom corner barely reads as lit; the strip
+            // that carries the status line with them does, and it is the thing
+            // the step is actually about.
+            footerRect: Qt.rect(tourLoader.pad + footer.x - Style.space(6),
+                                tourLoader.pad + footer.y - Style.space(6),
+                                footer.width + Style.space(12),
+                                footer.height + Style.space(12))
             onFinished: function (suppress) { root.finishTutorial(suppress) }
           }
           onLoaded: item.forceActiveFocus()

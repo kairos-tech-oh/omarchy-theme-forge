@@ -33,6 +33,8 @@ Item {
   readonly property string selectedHex: Palette.normHex(colors[selectedKey]) || "#000000"
   readonly property var selectedHsl: Palette.hexToHsl(selectedHex)
 
+  property bool stockOpen: false
+
   function applyHsl(hue, sat, light) {
     forge.setColor(editor.selectedKey, Palette.hslToHex(hue, sat, light))
   }
@@ -113,14 +115,59 @@ Item {
         font.pixelSize: Style.font.caption
       }
 
-      // Themes already on disk, to open and keep working on. Stock themes are
-      // listed too -- opening one is a good way to start from something known --
-      // but saving always goes to a new name, because the helper refuses to write
-      // over anything Omarchy ships.
+      // What Save means. Two states, next to the name, because it changes where
+      // the theme lands and whether it shows up in the switcher -- that belongs
+      // beside the name it is being saved under, not hidden in the footer.
+      Row {
+        width: parent.width
+        spacing: Style.spacing.sm
+
+        Text {
+          anchors.verticalCenter: parent.verticalCenter
+          text: "SAVE AS"
+          textFormat: Text.PlainText
+          color: forge.faint
+          font.family: forge.uiFont
+          font.pixelSize: Style.font.caption
+          font.letterSpacing: 1
+        }
+
+        RiceButton {
+          text: "a theme"
+          fontSize: Style.font.caption
+          verticalPadding: Style.space(2)
+          horizontalPadding: Style.space(4)
+          selected: !forge.savingWip
+          foreground: selected ? forge.colors.accent : forge.dim
+          accent: forge.colors.accent
+          tint: forge.surface
+          fillAlpha: forge.surfaceAlpha
+          tooltipText: "Goes to ~/.config/omarchy/themes and shows up in your theme switcher"
+          onClicked: forge.saveMode = "theme"
+        }
+
+        RiceButton {
+          text: "in progress"
+          fontSize: Style.font.caption
+          verticalPadding: Style.space(2)
+          horizontalPadding: Style.space(4)
+          selected: forge.savingWip
+          foreground: selected ? forge.colors.yellow : forge.dim
+          accent: forge.colors.yellow
+          tint: forge.surface
+          fillAlpha: forge.surfaceAlpha
+          tooltipText: "A real theme file, kept out of the way -- it will not appear in your theme switcher until you save it as a theme"
+          onClicked: forge.saveMode = "wip"
+        }
+      }
+
+      // Everything openable, in three bands, because "can I save over this?"
+      // has three different answers and that is the only thing worth grouping
+      // them by. Yours first, since that is what you came back for.
       Flow {
         width: parent.width
         spacing: Style.spacing.sm
-        visible: repeater.count > 0
+        visible: mine.count > 0 || drafts.count > 0
 
         Text {
           text: "OPEN"
@@ -132,19 +179,84 @@ Item {
         }
 
         Repeater {
-          id: repeater
+          id: drafts
+          model: forge.wipThemes
+          delegate: RiceButton {
+            required property string modelData
+            text: modelData
+            fontSize: Style.font.caption
+            verticalPadding: Style.space(2)
+            horizontalPadding: Style.space(4)
+            // In-progress themes are marked, because the difference between one
+            // of these and a finished theme is the whole point of having both.
+            foreground: forge.colors.yellow
+            accent: forge.colors.yellow
+            tooltipText: "In progress -- not in your theme switcher"
+            tint: forge.surface
+            fillAlpha: forge.surfaceAlpha
+            enabled: !forge.busy
+            onClicked: forge.loadTheme(modelData, "wip")
+          }
+        }
+
+        Repeater {
+          id: mine
           model: forge.userThemes
           delegate: RiceButton {
             required property string modelData
             text: modelData
             fontSize: Style.font.caption
             verticalPadding: Style.space(2)
-            horizontalPadding: Style.space(6)
+            horizontalPadding: Style.space(4)
             foreground: forge.dim
-            enabled: !forge.busy
-            onClicked: forge.loadTheme(modelData)
             tint: forge.surface
             fillAlpha: forge.surfaceAlpha
+            enabled: !forge.busy
+            onClicked: forge.loadTheme(modelData)
+          }
+        }
+      }
+
+      // The twenty-odd themes Omarchy ships, behind a fold. Opening one is the
+      // best way to start from something known -- and to see the numbers behind
+      // a palette you already like -- but listing them all unfolded would push
+      // everything else off the column.
+      Row {
+        width: parent.width
+        spacing: Style.spacing.sm
+
+        RiceButton {
+          text: (editor.stockOpen ? "\u2212  " : "+  ") + "Start from an Omarchy theme"
+          fontSize: Style.font.caption
+          verticalPadding: Style.space(2)
+          horizontalPadding: Style.space(4)
+          foreground: forge.faint
+          tint: forge.surface
+          fillAlpha: forge.surfaceAlpha
+          enabled: !forge.busy && forge.stockThemes.length > 0
+          tooltipText: "Saving one of these needs a new name -- Theme Forge will not write over a theme Omarchy ships"
+          onClicked: editor.stockOpen = !editor.stockOpen
+        }
+      }
+
+      Flow {
+        width: parent.width
+        spacing: Style.spacing.sm
+        visible: editor.stockOpen
+
+        Repeater {
+          model: forge.stockThemes
+          delegate: RiceButton {
+            required property string modelData
+            text: modelData
+            fontSize: Style.font.caption
+            verticalPadding: Style.space(2)
+            horizontalPadding: Style.space(4)
+            foreground: forge.faint
+            tint: forge.surface
+            fillAlpha: forge.surfaceAlpha
+            enabled: !forge.busy
+            onClicked: forge.loadTheme(modelData)
           }
         }
       }
@@ -307,13 +419,33 @@ Item {
         width: parent.width
         spacing: Style.spacing.controlGap
 
+        // The swatch is the way into the wheel. It is the biggest, most
+        // colour-shaped thing on the page, so it is what a hand reaches for.
         Rectangle {
           width: Style.space(34)
           height: Style.space(30)
-          radius: Style.cornerRadius
+          radius: Style.space(8)
+          antialiasing: true
           color: editor.selectedHex
           border.width: 1
-          border.color: forge.hairline
+          border.color: swatchHover.containsMouse ? forge.colors.accent : forge.hairline
+
+          MouseArea {
+            id: swatchHover
+            anchors.fill: parent
+            hoverEnabled: true
+            cursorShape: Qt.PointingHandCursor
+            onClicked: forge.wheelOpen = true
+          }
+
+          Text {
+            anchors.centerIn: parent
+            visible: swatchHover.containsMouse
+            text: "\u25c9"
+            textFormat: Text.PlainText
+            color: Palette.luminance(editor.selectedHex) > 0.4 ? "#000000" : "#ffffff"
+            font.pixelSize: Style.font.subtitle
+          }
         }
 
         RiceField {

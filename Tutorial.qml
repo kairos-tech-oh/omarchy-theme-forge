@@ -26,7 +26,7 @@ Item {
   // resized or the layout folds.
   property rect editorRect: Qt.rect(0, 0, 0, 0)
   property rect previewRect: Qt.rect(0, 0, 0, 0)
-  property rect actionsRect: Qt.rect(0, 0, 0, 0)
+  property rect footerRect: Qt.rect(0, 0, 0, 0)
 
   property int step: 0
   property bool dontShowAgain: false
@@ -74,7 +74,7 @@ Item {
           + "your desktop changes.\n\n"
           + "Revert puts back whichever theme you were wearing when you opened this "
           + "window, so trying one on costs you nothing.",
-      target: "actions"
+      target: "footer"
     }
   ]
 
@@ -98,7 +98,7 @@ Item {
     switch (tour.current.target) {
       case "editor": return tour.editorRect
       case "preview": return tour.previewRect
-      case "actions": return tour.actionsRect
+      case "footer": return tour.footerRect
       default: return Qt.rect(0, 0, 0, 0)
     }
   }
@@ -190,18 +190,32 @@ Item {
     id: card
     width: Math.min(Style.space(440), tour.width - Style.space(48))
     height: cardBody.implicitHeight + Style.space(36)
-    anchors.horizontalCenter: parent.horizontalCenter
-    // Sits opposite whatever is lit, so the card never covers the thing it is
-    // pointing at. With nothing lit it takes the middle.
-    y: {
-      if (!tour.hasSpotlight) return Math.round((tour.height - height) / 2)
-      var below = tour.spotlight.y + tour.spotlight.height + Style.space(20)
-      if (below + height <= tour.height) return below
-      var above = tour.spotlight.y - height - Style.space(20)
-      if (above >= 0) return above
-      return Math.round((tour.height - height) / 2)
+    // Vertically centred, always.
+    //
+    // It used to place itself above or below whatever was lit, which meant it
+    // sat in the middle on the first step and slid to the very bottom of the
+    // window on the last. A card that travels that far between steps costs more
+    // in re-finding it than it saves in not overlapping, so the card holds still
+    // and the spotlight does the moving.
+    y: Math.round((tour.height - height) / 2)
+
+    // Horizontally it moves only when it would otherwise sit on the thing it is
+    // pointing at -- and only sideways, so it stays on the same line of sight.
+    x: {
+      var gap = Style.space(20)
+      var centred = Math.round((tour.width - width) / 2)
+      if (!tour.hasSpotlight) return centred
+      // A spotlight spanning most of the window cannot be dodged. Centre it and
+      // accept the overlap; the lit edge still reads around it.
+      if (tour.spotlight.width > tour.width * 0.72) return centred
+      // Overlapping vertically is what makes the dodge necessary at all.
+      var clash = tour.spotlight.y < y + height && tour.spotlight.y + tour.spotlight.height > y
+      if (!clash) return centred
+      if (tour.spotlight.x + tour.spotlight.width / 2 < tour.width / 2)
+        return Math.min(tour.width - width - gap, tour.spotlight.x + tour.spotlight.width + gap)
+      return Math.max(gap, tour.spotlight.x - width - gap)
     }
-    Behavior on y { NumberAnimation { duration: 180; easing.type: Easing.OutCubic } }
+    Behavior on x { NumberAnimation { duration: 180; easing.type: Easing.OutCubic } }
 
     tint: tour.forge.surface
     fillAlpha: 0.97

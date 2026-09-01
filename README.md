@@ -177,7 +177,10 @@ Theme Forge
 everything Theme Forge needs is here
 ```
 
-Anything marked `--` tells you what to do about it.
+Anything marked `--` is missing and tells you what to do about it. A `!!` is a
+warning — Theme Forge works, but something will not behave the way you expect;
+the keybind-conflict case is described under
+[Troubleshooting](#troubleshooting).
 
 Theme Forge deliberately installs neither the binding nor the command itself. A
 plugin that rewrites your Hyprland config or drops things on your PATH when it
@@ -489,6 +492,30 @@ config error:
 ```sh
 hyprctl reload && hyprctl configerrors
 ```
+
+**The keybinding opens Theme Forge *and* something else.** Two binds are
+claiming the same key. Hyprland runs **every** bind that matches a keystroke,
+in the order they were declared — a second bind does not override the first,
+they both fire — and it says nothing about it: `hyprctl configerrors` stays
+empty and so does the log. `theme-forge doctor` is the thing that will tell
+you:
+
+```
+  !!   keybinding                   2 binds claim SUPER + SHIFT + T -- Hyprland runs all of them
+       - Floating terminal
+       - Theme Forge
+       fix: hl.unbind("SUPER + SHIFT + T") above the Theme Forge line
+```
+
+Unbind the key before claiming it, in `~/.config/hypr/bindings.lua`:
+
+```lua
+hl.unbind("SUPER + SHIFT + T")
+o.bind("SUPER + SHIFT + T", "Theme Forge", "omarchy-shell shell toggle kairos.theme-forge")
+```
+
+Or pick a different key for Theme Forge — `theme-forge doctor` will confirm it
+is the only claimant.
 
 **"Use an image" is greyed out.** Either ImageMagick is missing, or no private
 working directory was available. Theme Forge uses `$XDG_RUNTIME_DIR` and falls

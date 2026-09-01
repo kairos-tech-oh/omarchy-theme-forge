@@ -192,6 +192,43 @@ load-bearing:
 `tools/check-probe.sh` asserts the refusals, including that a FIFO returns
 immediately instead of blocking and that a symlink is refused by `O_NOFOLLOW`.
 
+### Compositor / desktop state read as input
+
+`cli/theme-forge doctor` reads `hyprctl binds -j` to answer one question: is
+anything else claiming Theme Forge's key? It has to come from there — Hyprland
+runs **every** bind matching a keystroke rather than letting one override
+another (the loop in its `KeybindManager` sets `found` and carries on; there is
+no `break`), and it reports nothing about the duplicate, so `hyprctl binds` is
+the only place the conflict is visible.
+
+That reply is desktop state, so both its size and its fields are chosen by
+whoever wrote the Hyprland config:
+
+- **Size** is bounded at the producer: the JSON is read through a pipe that
+  stops at `cap+1` bytes and is refused if it reaches the ceiling, rather than
+  being captured whole and measured afterwards. A 229-bind config measured
+  96 KiB; the cap is 1 MiB.
+- **Every `description`** is free text that ends up on a terminal, so each one
+  has its control characters replaced and is truncated to 60 characters before
+  it is printed. Tested with a description carrying an ANSI colour escape and
+  200 characters of padding: the escape lands as a space and the text is cut,
+  so it cannot colour the output or forge a status row.
+- The Hyprland config files are read with a byte ceiling too, so a single
+  enormous line cannot be pulled in whole.
+
+This is the CLI rather than the shell process, so the blast radius is a
+terminal — but a bounded read is a bounded read, and a status report that can be
+forged is not a status report.
+
+### Process signalling
+
+One hit, in that same bounded reader: `proc.kill()` on a `subprocess.Popen`
+handle. It is not the shape the rule is about. The target is a child spawned two
+lines earlier, addressed through the handle that owns it — a single positive PID
+the kernel keeps reserved until `wait()` reaps it. There is no stored PID to go
+stale, no identity to verify, and no negative PID or process group anywhere in
+this repo. It exists so a producer that ignores its closed pipe cannot linger.
+
 ### Delimited menu records built from untrusted strings
 
 A false match on `omarchy-file-select`, which is the portal file chooser, not

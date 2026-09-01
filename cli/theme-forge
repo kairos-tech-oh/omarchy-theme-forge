@@ -147,16 +147,157 @@ cmd_list() {
   done < <("$HELPER" stock 2>/dev/null | sort)
 }
 
+# Is Theme Forge's key claimed by anything else?
+#
+# Hyprland runs *every* bind that matches a key, in registration order -- the
+# loop in its keybind manager sets `found` and carries on rather than breaking.
+# So a second bind on the same key does not override Theme Forge and is not
+# overridden by it: both fire, on every press, and nothing says so.
+# `hyprctl configerrors` stays empty and the log stays quiet, because upstream
+# considers duplicate binds legitimate rather than a mistake to report.
+#
+# That leaves `hyprctl binds` as the only place the truth is visible, so this is
+# where the check has to come from. Read-only: it reports, and never edits
+# anyone's Hyprland config.
+keybind_status() {
+  python3 - "$PLUGIN_ID" <<'PY' 2>/dev/null || printf 'warn\tcould not read the keybindings from hyprctl\n'
+import json, os, re, subprocess, sys
+
+plugin_id = sys.argv[1]
+
+# Hyprland's modmask bits, from its own KeybindManager.
+MODS = {"SHIFT": 1, "CAPS": 2, "CTRL": 4, "CONTROL": 4, "ALT": 8, "MOD2": 16,
+        "MOD3": 32, "SUPER": 64, "LOGO": 64, "MOD5": 128}
+
+# `hyprctl binds` is desktop state, not first-party data. Its size and every one
+# of its fields are chosen by whoever wrote the Hyprland config -- and a bind
+# description is free text that ends up on this terminal. So the reply is
+# bounded before it is parsed, and each description is bounded and stripped
+# before it is printed.
+#
+# A 229-bind config measured 96 KiB. 1 MiB is ten times that and is still a hard
+# ceiling on what this can be made to hold.
+BINDS_CAP = 1024 * 1024
+CONFIG_CAP = 1024 * 1024
+DESCRIPTION_MAX = 60
+
+
+def clean(text):
+    """A description, safe to print on a terminal and to sit inside a list."""
+    out = re.sub(r"[\x00-\x1f\x7f]", " ", str(text))
+    out = out.strip()
+    if len(out) > DESCRIPTION_MAX:
+        out = out[:DESCRIPTION_MAX - 1] + "\u2026"
+    return out or "(no description)"
+
+
+def bounded_output(argv, cap):
+    """Read at most cap+1 bytes from a command, stopping it at the ceiling.
+
+    cap+1 so "exactly at the limit" is distinguishable from "truncated" -- a
+    JSON document cut at the cap would not parse anyway, but silently treating a
+    truncated bind list as the whole list is how a conflict goes unreported.
+    """
+    # The kill() here is not the dangerous kind. It targets a child this line
+    # just spawned, through the Popen handle that owns it -- a single positive
+    # PID the kernel keeps reserved until wait() reaps it, so there is no stored
+    # PID to go stale, no identity to confuse, and no process group to hit. It
+    # is what stops a producer that ignores the closed pipe from lingering.
+    proc = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    try:
+        data = proc.stdout.read(cap + 1)
+    finally:
+        proc.stdout.close()
+        proc.kill()
+        proc.wait(timeout=5)
+    if len(data) > cap:
+        raise ValueError("reply larger than %d bytes" % cap)
+    return data
+
+
+def binds_for(text):
+    """The keys an o.bind line claims, from any Hyprland config that names us."""
+    return re.findall(r'o\.bind\(\s*"([^"]+)"', text)
+
+
+def modmask_and_key(spec):
+    parts = [p.strip().upper() for p in spec.split("+") if p.strip()]
+    mask = 0
+    key = ""
+    for part in parts:
+        if part in MODS:
+            mask |= MODS[part]
+        else:
+            key = part
+    return mask, key
+
+
+config = os.path.expanduser("~/.config/hypr")
+claimed = []
+for root, _dirs, files in os.walk(config):
+    for name in files:
+        path = os.path.join(root, name)
+        try:
+            # Bounded: a config file is a few KiB, and one enormous line would
+            # otherwise be read whole before anything looked at it.
+            with open(path, encoding="utf-8", errors="replace") as handle:
+                for line in handle.read(CONFIG_CAP).splitlines():
+                    if plugin_id in line:
+                        claimed.extend(binds_for(line))
+        except OSError:
+            continue
+
+if not claimed:
+    print("no\tnone found in ~/.config/hypr -- this command still works")
+    raise SystemExit(0)
+
+try:
+    live = json.loads(bounded_output(["hyprctl", "binds", "-j"], BINDS_CAP))
+    if not isinstance(live, list):
+        raise ValueError("not a list of binds")
+except Exception:
+    print("ok\t%s (could not check it for conflicts)" % clean(claimed[0]))
+    raise SystemExit(0)
+
+lines = []
+conflicted = False
+for spec in claimed:
+    mask, key = modmask_and_key(spec)
+    rivals = [clean(b.get("description"))
+              for b in live
+              if isinstance(b, dict)
+              and b.get("modmask") == mask and str(b.get("key", "")).upper() == key]
+    if len(rivals) <= 1:
+        lines.append(("ok", clean(spec), []))
+        continue
+    conflicted = True
+    lines.append(("warn", "%d binds claim %s -- Hyprland runs all of them" % (len(rivals), clean(spec)),
+                  ["- " + r for r in rivals]
+                  + ['fix: hl.unbind("%s") above the Theme Forge line' % clean(spec)]))
+
+state, summary, extra = lines[0]
+if conflicted:
+    state, summary, extra = next(l for l in lines if l[0] == "warn")
+print("%s\t%s" % (state, summary))
+for line in extra:
+    print(line)
+PY
+}
+
 cmd_doctor() {
   local status=0
+  # Three states, not two. A keybind conflict does not stop Theme Forge working
+  # -- it opens exactly as it should, and then something else opens too -- so it
+  # is a warning the user must act on rather than a missing dependency, and it
+  # does not flip the exit code.
+  local warned=0
   check() {
     local label="$1" detail="${3:-}"
-    if [[ $2 == "ok" ]]; then
-      printf '  %sok  %s %-28s %s%s%s\n' "$GREEN" "$OFF" "$label" "$DIM" "$detail" "$OFF"
-    else
-      printf '  %s--  %s %-28s %s\n' "$RED" "$OFF" "$label" "$detail"
-      status=1
-    fi
+    case "$2" in
+      ok)   printf '  %sok  %s %-28s %s%s%s\n' "$GREEN" "$OFF" "$label" "$DIM" "$detail" "$OFF" ;;
+      warn) printf '  %s!!  %s %-28s %s\n' "$YELLOW" "$OFF" "$label" "$detail"; warned=1 ;;
+      *)    printf '  %s--  %s %-28s %s\n' "$RED" "$OFF" "$label" "$detail"; status=1 ;;
+    esac
   }
 
   printf '%sTheme Forge%s\n' "$BOLD" "$OFF"
@@ -181,16 +322,16 @@ cmd_doctor() {
 
   # A keybinding is optional -- Theme Forge has no bar presence, so without one
   # this command is the only way in, which is worth saying out loud.
-  local bound
-  # Only lines that actually mention this plugin, so the key reported is the one
-  # bound to it rather than whichever o.bind happens to come first in the file.
-  bound=$(grep -rhs -- "$PLUGIN_ID" "$HOME/.config/hypr/" 2>/dev/null \
-    | grep -o 'o\.bind("[^"]*"' | head -1 | sed 's/o\.bind("//; s/"$//')
-  if [[ -n $bound ]]; then
-    check "keybinding" ok "$bound"
-  else
-    check "keybinding" no "none found in ~/.config/hypr -- this command still works"
-  fi
+  # Reported as `<state>\t<summary>\n<extra lines...>`, so the conflict case can
+  # say more than one line without the caller parsing anything.
+  local keybind_report state summary
+  keybind_report=$(keybind_status)
+  state=${keybind_report%%$'\t'*}
+  summary=$(printf '%s' "${keybind_report#*$'\t'}" | head -1)
+  check "keybinding" "$state" "$summary"
+  printf '%s\n' "$keybind_report" | tail -n +2 | while IFS= read -r line; do
+    [[ -n $line ]] && printf '       %s%s%s\n' "$DIM" "$line" "$OFF"
+  done
 
   if command -v magick >/dev/null 2>&1 || command -v convert >/dev/null 2>&1; then
     check "ImageMagick" ok "images and generated backgrounds"
@@ -211,10 +352,12 @@ cmd_doctor() {
     check "private scratch directory" no "images will be unavailable, palette editing still works"
   fi
 
-  if (( status == 0 )); then
-    printf '\n%severything Theme Forge needs is here%s\n' "$GREEN" "$OFF"
-  else
+  if (( status != 0 )); then
     printf '\n%ssomething above needs attention%s\n' "$YELLOW" "$OFF"
+  elif (( warned )); then
+    printf '\n%severything Theme Forge needs is here -- but see the warning above%s\n' "$YELLOW" "$OFF"
+  else
+    printf '\n%severything Theme Forge needs is here%s\n' "$GREEN" "$OFF"
   fi
   return "$status"
 }

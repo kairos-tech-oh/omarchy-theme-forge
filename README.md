@@ -66,7 +66,10 @@ faint light traces, and a little grain so the gradient does not band. Roughly
 two seconds.
 
 **Tiles like anything else.** It opens as an ordinary window, not a floating
-overlay, so Hyprland lays it out under whatever rules you already run.
+overlay, so Hyprland lays it out under whatever rules you already run. The
+window ground is translucent so your wallpaper reads through it — while the
+preview and every swatch stay fully opaque, so the colours you are judging are
+never tinted by whatever is behind the window.
 
 **Writes a theme Omarchy understands.** `colors.toml` plus `backgrounds/`, in
 `~/.config/omarchy/themes/<name>/`.
@@ -220,6 +223,10 @@ The layout folds with the window:
 | **< 880px** | Stacked — preview on top, editor beneath, both full width |
 
 Minimum size is 560 × 460.
+
+Prefer it more or less see-through? `surfaceAlpha` near the top of `Panel.qml`
+is the one number — 1.0 is fully opaque, and Hyprland's own `default-opacity`
+applies on top of whatever you set.
 
 Hyprland sees it as class `org.quickshell`, title `Theme Forge`. If you would
 rather it floated, or want it a particular size, that is a rule of your own in

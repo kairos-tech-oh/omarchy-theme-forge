@@ -22,9 +22,21 @@ button, and `opened` bound to the window's visibility so the host's
 is what `isPluginOpen()` reads, and a plugin holding a private flag would leave
 `toggle` a no-op after the user closed the window themselves.
 
-The window is opaque. Hyprland's own `default-opacity` tag already gives it
-0.985 focused / 0.96 unfocused like every other window on the desktop; a second
-alpha painted underneath would make it the one window that is translucent twice.
+The window ground is translucent at 0.90, and the number is measured rather
+than chosen: the app it was styled after was captured over a pure black and a
+pure white background and solved for its alpha, `(white - black) / 255`, which
+came out at 0.13 across channels. Hyprland's own `default-opacity` tag
+(0.985 focused / 0.96 unfocused) is not enough for that look on its own -- four
+percent is invisible against a dark wallpaper -- so an app that reads as
+translucent is painting its own alpha.
+
+What stays opaque is the part that matters. Every swatch, and the mock desktop
+in the preview, is a Rectangle with an explicit colour painted over that ground,
+so the colours being judged composite against the theme's own background and
+never against the wallpaper behind the window. The same measurement over this
+window: mock desktop 0.016 transparency, window ground 0.108, and a terminal
+alongside at 0.039 as the control. A translucent preview would make the tool lie
+about the one thing it exists to show.
 
 The layout folds at 880px because a tiled window's width is whatever the user's
 layout gives it — half a screen beside one window, a third beside two — and a

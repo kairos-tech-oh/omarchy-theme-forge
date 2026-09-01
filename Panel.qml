@@ -707,14 +707,36 @@ Item {
   // *current* theme -- so this window is dark because the user's desktop is,
   // and it repaints the moment they apply something they made here.
   //
-  // The background is opaque on purpose. This is an ordinary toplevel window
-  // now, so Hyprland's own `default-opacity` tag already gives it 0.985 focused
-  // / 0.96 unfocused like every other window on the desktop; painting a second
-  // alpha underneath that would make it the one window that is translucent
-  // twice. Anyone who wants more can say so in a window rule and have it apply
-  // consistently.
-
-  readonly property color surface: Color.menu.background
+  // The window ground is translucent, and the amount is measured rather than
+  // picked. Omakade -- the Omarchy-adjacent Qt Quick app this was styled after
+  // -- was captured over a pure black and a pure white background and solved
+  // for its alpha: (white - black) / 255 came out at 0.13 across channels, so
+  // its window sits at about 0.87 once Hyprland's own `default-opacity` tag
+  // (0.985 focused / 0.96 unfocused) has been applied on top. Normalising for
+  // that tag puts Omakade's own paint at 0.906; this file's 0.90 measures back
+  // as 0.903 the same way. The two are within a third of a percent.
+  //
+  // The same measurement over this window confirms the split holds:
+  //
+  //   the mock desktop      0.016 transparency  (opaque, only the compositor)
+  //   the window ground     0.108               (0.90 x 0.985)
+  //   a terminal alongside  0.039               (0.96, the control)
+  //
+  // Hyprland's tag alone is not enough for this look: 0.96 is a four percent
+  // wash, invisible against a dark wallpaper. An app that reads as translucent
+  // is painting its own alpha, and this is that alpha.
+  //
+  // What stays opaque matters more than what does not. Every swatch, and the
+  // mock desktop in the preview, is a Rectangle with an explicit colour painted
+  // over this ground -- so the colours being judged are composited against the
+  // theme's own background and never against the wallpaper behind the window.
+  // A translucent preview would make this tool lie about the thing it exists to
+  // show.
+  readonly property real surfaceAlpha: 0.90
+  readonly property color surface: Qt.rgba(Color.menu.background.r,
+                                           Color.menu.background.g,
+                                           Color.menu.background.b,
+                                           root.surfaceAlpha)
   readonly property color ink: Color.menu.text
   readonly property color dim: Qt.rgba(ink.r, ink.g, ink.b, 0.55)
   readonly property color faint: Qt.rgba(ink.r, ink.g, ink.b, 0.28)

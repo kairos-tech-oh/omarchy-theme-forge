@@ -1,0 +1,247 @@
+#!/bin/bash
+
+# theme-forge -- open and inspect the Theme Forge designer from a terminal.
+#
+# The designer itself is a window owned by omarchy-shell, so this is a front end for
+# the shell's IPC rather than a program that draws anything. It exists because
+#
+#     omarchy-shell shell toggle kairos.theme-forge
+#
+# is a lot to type and impossible to guess, and because `edit` and `doctor`
+# have no equivalent at all.
+#
+# Deliberately not here: rolling or saving a theme headlessly. All of that lives
+# in Palette.js, which runs inside the shell's QML engine, and standing up a
+# second way to invoke it would mean a second copy of the contrast solver. One
+# source of truth for the colour maths is worth more than a headless roller.
+#
+#   theme-forge                open the designer (toggles, like the keybinding)
+#   theme-forge open|close
+#   theme-forge edit <name>    open it with an existing theme loaded
+#   theme-forge list           what is installed, and which are yours to edit
+#   theme-forge doctor         check the install and its dependencies
+#   theme-forge help
+
+set -uo pipefail
+
+PLUGIN_ID="kairos.theme-forge"
+PLUGIN_DIR="$HOME/.config/omarchy/plugins/$PLUGIN_ID"
+HELPER="$PLUGIN_DIR/helper/theme-forge"
+THEMES_DIR="$HOME/.config/omarchy/themes"
+OMARCHY_ROOT="${OMARCHY_PATH:-/usr/share/omarchy}"
+
+# Colour only when someone is watching. Piped into anything, this stays plain.
+if [[ -t 1 ]]; then
+  DIM=$'\e[2m'; BOLD=$'\e[1m'; GREEN=$'\e[32m'; RED=$'\e[31m'; YELLOW=$'\e[33m'; OFF=$'\e[0m'
+else
+  DIM=""; BOLD=""; GREEN=""; RED=""; YELLOW=""; OFF=""
+fi
+
+die() {
+  printf '%stheme-forge:%s %s\n' "$RED" "$OFF" "$1" >&2
+  exit "${2:-1}"
+}
+
+require_installed() {
+  [[ -x $HELPER ]] || die "Theme Forge is not installed at $PLUGIN_DIR
+Install it with:  omarchy plugin add <repo-url> --enable"
+}
+
+# The shell only loads a third-party plugin that is listed in shell.json.
+# Without this check, `open` silently does nothing and there is no clue why.
+enabled() {
+  python3 - "$PLUGIN_ID" <<'PY' 2>/dev/null
+import json, os, sys
+path = os.path.expanduser("~/.config/omarchy/shell.json")
+try:
+    with open(path) as handle:
+        config = json.load(handle)
+except Exception:
+    sys.exit(1)
+sys.exit(0 if any(p.get("id") == sys.argv[1] for p in config.get("plugins", [])) else 1)
+PY
+}
+
+require_enabled() {
+  enabled && return 0
+  die "$PLUGIN_ID is installed but not enabled.
+Enable it with:  omarchy plugin enable $PLUGIN_ID"
+}
+
+# A theme name is about to become a directory and an IPC argument, so it gets
+# the same whitelist the plugin applies everywhere else. Refused, not repaired.
+valid_name() {
+  [[ -n ${1:-} && ${#1} -le 32 && $1 =~ ^[a-z0-9][a-z0-9-]*$ ]]
+}
+
+cmd_open() { require_installed; require_enabled; omarchy-shell shell summon "$PLUGIN_ID" '{}' >/dev/null; }
+cmd_close() { require_installed; omarchy-shell shell hide "$PLUGIN_ID" >/dev/null; }
+cmd_toggle() { require_installed; require_enabled; omarchy-shell shell toggle "$PLUGIN_ID" '{}' >/dev/null; }
+
+cmd_edit() {
+  local name="${1:-}"
+  require_installed
+  require_enabled
+  [[ -n $name ]] || die "which theme?  theme-forge edit <name>"
+  name=${name,,}
+  valid_name "$name" || die "'$name' is not a theme name (lowercase letters, numbers and dashes)"
+  [[ -f "$THEMES_DIR/$name/colors.toml" || -f "$OMARCHY_ROOT/themes/$name/colors.toml" ]] \
+    || die "there is no theme called '$name'.  theme-forge list"
+  # The payload reaches Overlay.open(), which re-validates the name before it
+  # loads anything -- this is a convenience, not the guard.
+  omarchy-shell shell summon "$PLUGIN_ID" "{\"theme\":\"$name\"}" >/dev/null
+}
+
+cmd_list() {
+  require_installed
+  local current name
+  current=$(cat "$HOME/.local/state/omarchy/current/theme.name" 2>/dev/null)
+
+  # Three groups, because "can Theme Forge save over this?" has three different
+  # answers and they are the reason a listing is worth having at all. The rules
+  # are the ones require_writable_theme enforces in the helper, so what is shown
+  # here is what Save will actually do.
+  local -a mine=() cloned=()
+  while IFS= read -r name; do
+    [[ -n $name ]] || continue
+    if [[ -L "$THEMES_DIR/$name" || -e "$THEMES_DIR/$name/.git" ]]; then
+      cloned+=("$name")
+    else
+      mine+=("$name")
+    fi
+  done < <("$HELPER" list 2>/dev/null | sort)
+
+  show() {
+    local name="$1" note="${2:-}"
+    if [[ $name == "$current" ]]; then
+      printf '  %s%-22s%s %sin use%s%s\n' "$GREEN" "$name" "$OFF" "$DIM" "$OFF" "${note:+  $note}"
+    else
+      printf '  %-22s %s\n' "$name" "${note:+       $note}"
+    fi
+  }
+
+  printf '%sYours%s %s-- Save writes straight back to these%s\n' "$BOLD" "$OFF" "$DIM" "$OFF"
+  if (( ${#mine[@]} )); then
+    for name in "${mine[@]}"; do show "$name"; done
+  else
+    printf '  %snone yet -- press Ctrl+R in the designer and name one%s\n' "$DIM" "$OFF"
+  fi
+
+  if (( ${#cloned[@]} )); then
+    printf '\n%sInstalled from a repository%s %s-- open to edit, saving needs a new name%s\n' \
+      "$BOLD" "$OFF" "$DIM" "$OFF"
+    for name in "${cloned[@]}"; do
+      if [[ -L "$THEMES_DIR/$name" ]]; then
+        show "$name" "${DIM}symlinked working copy${OFF}"
+      else
+        show "$name" "${DIM}git${OFF}"
+      fi
+    done
+  fi
+
+  printf '\n%sShipped with Omarchy%s %s-- open to start from one, saving needs a new name%s\n' \
+    "$BOLD" "$OFF" "$DIM" "$OFF"
+  while IFS= read -r name; do
+    [[ -n $name ]] || continue
+    show "$name"
+  done < <("$HELPER" stock 2>/dev/null | sort)
+}
+
+cmd_doctor() {
+  local status=0
+  check() {
+    local label="$1" detail="${3:-}"
+    if [[ $2 == "ok" ]]; then
+      printf '  %sok  %s %-28s %s%s%s\n' "$GREEN" "$OFF" "$label" "$DIM" "$detail" "$OFF"
+    else
+      printf '  %s--  %s %-28s %s\n' "$RED" "$OFF" "$label" "$detail"
+      status=1
+    fi
+  }
+
+  printf '%sTheme Forge%s\n' "$BOLD" "$OFF"
+
+  if [[ -x $HELPER ]]; then
+    check "installed" ok "$PLUGIN_DIR"
+  else
+    check "installed" no "not found at $PLUGIN_DIR"
+  fi
+
+  if enabled; then
+    check "enabled in shell.json" ok
+  else
+    check "enabled in shell.json" no "run: omarchy plugin enable $PLUGIN_ID"
+  fi
+
+  if omarchy-shell shell ping >/dev/null 2>&1; then
+    check "omarchy-shell responding" ok
+  else
+    check "omarchy-shell responding" no "the shell is not running"
+  fi
+
+  # A keybinding is optional -- Theme Forge has no bar presence, so without one
+  # this command is the only way in, which is worth saying out loud.
+  local bound
+  # Only lines that actually mention this plugin, so the key reported is the one
+  # bound to it rather than whichever o.bind happens to come first in the file.
+  bound=$(grep -rhs -- "$PLUGIN_ID" "$HOME/.config/hypr/" 2>/dev/null \
+    | grep -o 'o\.bind("[^"]*"' | head -1 | sed 's/o\.bind("//; s/"$//')
+  if [[ -n $bound ]]; then
+    check "keybinding" ok "$bound"
+  else
+    check "keybinding" no "none found in ~/.config/hypr -- this command still works"
+  fi
+
+  if command -v magick >/dev/null 2>&1 || command -v convert >/dev/null 2>&1; then
+    check "ImageMagick" ok "images and generated backgrounds"
+  else
+    check "ImageMagick" no "backgrounds and image seeding are off without it"
+  fi
+
+  if command -v python3 >/dev/null 2>&1; then
+    check "python3" ok "bounded file reads"
+  else
+    check "python3" no "required"
+  fi
+
+  local scratch
+  if scratch=$("$HELPER" scratch 2>/dev/null) && [[ -n $scratch ]]; then
+    check "private scratch directory" ok "$scratch"
+  else
+    check "private scratch directory" no "images will be unavailable, palette editing still works"
+  fi
+
+  if (( status == 0 )); then
+    printf '\n%severything Theme Forge needs is here%s\n' "$GREEN" "$OFF"
+  else
+    printf '\n%ssomething above needs attention%s\n' "$YELLOW" "$OFF"
+  fi
+  return "$status"
+}
+
+cmd_help() {
+  cat <<USAGE
+${BOLD}theme-forge${OFF} -- the Omarchy theme designer
+
+  ${BOLD}theme-forge${OFF}                 open the designer (toggles it, like the keybinding)
+  ${BOLD}theme-forge open${OFF}            open it
+  ${BOLD}theme-forge close${OFF}           close it
+  ${BOLD}theme-forge edit${OFF} <name>     open it with an existing theme loaded
+  ${BOLD}theme-forge list${OFF}            what is installed, and which are yours to edit
+  ${BOLD}theme-forge doctor${OFF}          check the install and its dependencies
+  ${BOLD}theme-forge help${OFF}            this
+
+${DIM}Inside the designer:  Ctrl+R roll   Ctrl+S save   Ctrl+Enter apply   Esc close${OFF}
+USAGE
+}
+
+case "${1:-toggle}" in
+  ""|toggle)        cmd_toggle ;;
+  open|show)        cmd_open ;;
+  close|hide)       cmd_close ;;
+  edit)             shift; cmd_edit "$@" ;;
+  list|ls)          cmd_list ;;
+  doctor|check)     cmd_doctor ;;
+  help|-h|--help)   cmd_help ;;
+  *)                printf '%stheme-forge:%s unknown command %s\n\n' "$RED" "$OFF" "'$1'" >&2; cmd_help >&2; exit 1 ;;
+esac

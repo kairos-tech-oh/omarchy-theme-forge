@@ -1,0 +1,5 @@
+# Nothing generated lives in the repo -- the plugin is what you see. This is
+# here for the strays a desktop leaves behind.
+*.swp
+*~
+.DS_Store

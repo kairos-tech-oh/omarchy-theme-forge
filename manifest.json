@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "id": "kairos.theme-forge",
+  "name": "Theme Forge",
+  "version": "1.0.0",
+  "author": "kairos",
+  "license": "MIT",
+  "description": "Design an Omarchy theme in a real tiled window and watch a mock desktop wear it as you go. Roll a random palette that is guaranteed readable, tune any of the twenty-six colours by hand, or seed the whole thing from a wallpaper. Saves a real theme directory and can apply it, with one click to put your old theme back.",
+  "kinds": [
+    "panel"
+  ],
+  "entryPoints": {
+    "panel": "Panel.qml"
+  }
+}

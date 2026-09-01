@@ -1,0 +1,645 @@
+#!/bin/bash
+
+# Theme Forge helper -- the only part of this plugin that touches the
+# filesystem, runs another program, or changes anything about the desktop.
+#
+# The QML side does all of the colour maths and none of the I/O. Everything with
+# a consequence is here, in one file, invoked as an argv array from Quickshell's
+# Process (so no shell parses any of these arguments) and with every payload that
+# could be long or hostile arriving on stdin rather than in argv.
+#
+# Usage:
+#
+#   theme-forge [--budget N] <command> [args...]
+#
+# --budget is a ceiling for the whole invocation, not for each program it runs.
+# N paths at 25 seconds each is not a 25 second limit.
+#
+#   scratch                  create and verify the private working directory
+#   probe <path>             refuse an image before any decoder sees it
+#   quantize <path> <n>      the n dominant colours of an image, as hex
+#   thumb <path>             a bounded downscale into the scratch directory
+#   wallpaper <name>         draw a background from the palette on stdin
+#   adopt <name> <path>      copy a probed image in as the theme's background
+#   save <name>              write colors.toml, read from stdin
+#   apply <name>             omarchy-theme-set
+#   list                     the user's own theme names
+#   locked                   the user themes this refuses to write to, and why
+#   stock                    the theme names Omarchy ships
+#   current                  the theme name in use right now
+#   load <name>              print an existing theme's colors.toml
+#   draft-save               store the in-progress palette, read from stdin
+#   draft-load               print it back
+#
+# Exit codes are the interface. 0 is fine, 1 is a refusal with a reason on
+# stderr, and anything the QML side needs to distinguish gets its own number.
+
+set -uo pipefail
+
+EXIT_OK=0
+EXIT_REFUSED=1
+EXIT_NO_SCRATCH=7
+EXIT_TOO_BIG=8
+EXIT_NO_TOOL=9
+EXIT_TIMEOUT=10
+
+# ----------------------------------------------------------------- ceilings
+#
+# Every one of these is applied at the producer, before the bytes exist, not
+# checked afterwards. A ceiling downstream of the allocation it claims to
+# prevent is not a ceiling.
+
+# ImageMagick's histogram of 8 colours measured 640 bytes. 64 KiB is a hundred
+# times that and is still a hard bound on what can be held.
+QUANTIZE_CAP=65536
+
+# colors.toml is 26 short lines. A generated one measured 1.1 KiB.
+TOML_CAP=16384
+
+# The draft is one JSON object of a few dozen hex strings.
+DRAFT_CAP=65536
+
+# A theme name is at most 32 characters; a directory listing of them is small.
+LIST_CAP=32768
+
+# PATH_MAX is 4096, so a longer reply is not a path this system can open.
+PATH_CAP=4096
+
+# A 4K JPEG at quality 92 measured 877 KiB. 12 MB is more than ten times that
+# and is still a hard bound on what an encode can be made to write.
+IMAGE_CAP=12000000
+
+# What ImageMagick may spend on any single invocation, regardless of the input.
+# The declared-dimension probe runs first and refuses the obvious cases, but the
+# probe reads the file and ImageMagick opens it a second time -- so this, not the
+# probe, is the bound that actually holds. It is also in a separate process,
+# which can be killed without taking omarchy-shell with it.
+IM_LIMITS=(-limit memory 256MiB -limit map 256MiB -limit area 64MP -limit time 25 -limit thread 2)
+
+WALLPAPER_WIDTH=3840
+WALLPAPER_HEIGHT=2160
+
+OMARCHY_ROOT="${OMARCHY_PATH:-/usr/share/omarchy}"
+THEMES_DIR="$HOME/.config/omarchy/themes"
+STATE_DIR="$HOME/.local/state/kairos.theme-forge"
+CURRENT_NAME_FILE="$HOME/.local/state/omarchy/current/theme.name"
+
+SELF_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+READER="$SELF_DIR/reader.py"
+
+# ------------------------------------------------------------------ budget
+
+BUDGET=30
+if [[ ${1:-} == "--budget" ]]; then
+  case "${2:-}" in
+    ''|*[!0-9]*) BUDGET=30 ;;
+    *) BUDGET=$2 ;;
+  esac
+  (( BUDGET < 1 )) && BUDGET=1
+  (( BUDGET > 180 )) && BUDGET=180
+  shift 2
+fi
+STARTED_AT=$(date +%s)
+
+# Seconds left in this invocation's budget.
+#
+# `timeout 0` means *no limit*, so a budget that has run out would silently
+# remove the ceiling instead of enforcing it. Clamped to 1, always.
+remaining() {
+  local now elapsed left
+  now=$(date +%s)
+  elapsed=$(( now - STARTED_AT ))
+  left=$(( BUDGET - elapsed ))
+  (( left < 1 )) && left=1
+  printf '%s' "$left"
+}
+
+# Everything this helper prints, on either stream, goes through one of these
+# two. StdioCollector on the QML side retains a process's complete output before
+# any signal fires, so a check after the fact is downstream of the allocation it
+# claims to prevent -- the ceiling has to be here, at the producer.
+#
+# OUT_CAP is generous next to what these actually emit (a path, a theme name, a
+# sentence) and is still a hard bound on what the shell can be made to hold.
+OUT_CAP=4096
+
+say() {
+  printf '%s\n' "${1:0:$OUT_CAP}"
+}
+
+refuse() {
+  printf 'theme-forge: %s\n' "${1:0:$OUT_CAP}" >&2
+  exit "${2:-$EXIT_REFUSED}"
+}
+
+need_tool() {
+  command -v "$1" >/dev/null 2>&1 || refuse "$1 is not installed" "$EXIT_NO_TOOL"
+}
+
+# Which ImageMagick this box has. v7 is `magick`; v6 is `convert`, and its
+# `convert` is not the same program as coreutils' -- checking for `magick` first
+# is what keeps us off any other `convert` on PATH.
+magick_bin() {
+  if command -v magick >/dev/null 2>&1; then printf 'magick'
+  elif command -v convert >/dev/null 2>&1; then printf 'convert'
+  else return 1
+  fi
+}
+
+# Run a producer under the remaining budget with a hard byte ceiling, and treat
+# reaching the ceiling as a failure rather than as data.
+#
+# The cap is applied by `head -c` inside the pipeline, so the producer is stopped
+# at the ceiling rather than being allowed to finish and checked afterwards. One
+# byte more than the cap is requested on purpose: reading exactly `cap` bytes of
+# an oversized reply yields a valid-looking prefix that would be accepted.
+BOUNDED_OUT=""
+run_bounded() {
+  local cap="$1"; shift
+  local status
+  BOUNDED_OUT=$(timeout "$(remaining)" "$@" 2>/dev/null | head -c $(( cap + 1 )))
+  status=${PIPESTATUS[0]}
+  if (( $(printf '%s' "$BOUNDED_OUT" | wc -c) > cap )); then
+    BOUNDED_OUT=""
+    return "$EXIT_TOO_BIG"
+  fi
+  if (( status == 124 )); then
+    BOUNDED_OUT=""
+    return "$EXIT_TIMEOUT"
+  fi
+  return "$status"
+}
+
+# --------------------------------------------------------- private scratch
+#
+# $XDG_RUNTIME_DIR is /run/user/<uid>, mode 0700 and owned by this user, which
+# is the only directory on a normal system that is both private and writable
+# without a race. ~/.cache is the fallback.
+#
+# /tmp is not a fallback. A predictable name there can be pre-created by another
+# local user as a symlink, and every write through it lands wherever they chose.
+# If neither private directory is usable this fails closed and the image half of
+# the plugin greys out with a reason -- a wallpaper is an ornament, and failing
+# closed costs nothing worth a foothold.
+scratch_dir() {
+  local base dir
+  for base in "${XDG_RUNTIME_DIR:-}" "${HOME:-}/.cache"; do
+    [[ -n $base && $base != "/.cache" ]] || continue
+    dir="$base/kairos-theme-forge"
+    mkdir -m 700 -p -- "$dir" 2>/dev/null || continue
+    # -O is the one that matters: a directory someone else created first is
+    # theirs, whatever its mode says.
+    if [[ -d $dir && ! -L $dir && -O $dir ]]; then
+      printf '%s' "$dir"
+      return 0
+    fi
+  done
+  return 1
+}
+
+require_scratch() {
+  local dir
+  dir=$(scratch_dir) || refuse "no private directory is available (tried \$XDG_RUNTIME_DIR and ~/.cache)" "$EXIT_NO_SCRATCH"
+  printf '%s' "$dir"
+}
+
+# Create a directory and confirm it is ours before anything is written into it.
+# -O is the check that matters: a directory someone else created first is theirs,
+# whatever its mode says, and a pre-created symlink would redirect every write
+# that followed.
+require_dir() {
+  local dir="$1"
+  mkdir -p -- "$dir" 2>/dev/null
+  [[ -d $dir && ! -L $dir && -O $dir ]] || refuse "$dir is not a directory this can write to"
+}
+
+# Write stdin to a path that must not already exist, through reader.py's
+# O_CREAT|O_EXCL|O_NOFOLLOW. A fixed scratch name is a name anyone who can write
+# to the directory can create first as a symlink; a plain `>` in the shell then
+# truncates whatever they pointed it at. O_EXCL means there is nothing to
+# redirect. The caller renames the result into place, and rename(2) replaces a
+# symlink at the destination rather than following it.
+# The mode is explicit because these files have two different audiences. A theme
+# is something the user may well publish -- Omarchy installs one by cloning a git
+# repo -- so its files are ordinary 0644 content. The draft is this plugin's own
+# state and stays 0600.
+write_new() {
+  local target="$1" cap="$2" mode="${3:-0600}"
+  rm -f -- "$target"
+  timeout "$(remaining)" python3 "$READER" write "$target" "$cap" "$mode"
+}
+
+state_dir() {
+  local dir="$STATE_DIR"
+  mkdir -m 700 -p -- "$dir" 2>/dev/null || return 1
+  [[ -d $dir && ! -L $dir && -O $dir ]] || return 1
+  printf '%s' "$dir"
+}
+
+# --------------------------------------------------------------- the name
+#
+# The name becomes a directory that gets written, a filename prefix, and an
+# argument to omarchy-theme-set. This is deliberately stricter than
+# omarchy-theme-set's own check, and it refuses rather than repairs: silently
+# turning `../evil` into `evil` would write a real theme under a name the user
+# never asked for.
+#
+# The same rule lives in Sanitise.js. Both are load-bearing -- the QML side keeps
+# the UI honest, and this one is what actually guards the filesystem, because a
+# helper is a program anyone can run.
+valid_name() {
+  local name="$1"
+  [[ -n $name ]] || return 1
+  (( ${#name} <= 32 )) || return 1
+  [[ $name =~ ^[a-z0-9][a-z0-9-]*$ ]] || return 1
+  return 0
+}
+
+require_name() {
+  local name="${1:-}"
+  valid_name "$name" || refuse "'$name' is not a usable theme name (a-z, 0-9 and dashes, up to 32 characters)"
+  printf '%s' "$name"
+}
+
+# Everything above, plus the three things that make a name valid but not ours to
+# write to.
+require_writable_theme() {
+  local name dir
+  name=$(require_name "${1:-}") || exit $?
+  dir="$THEMES_DIR/$name"
+
+  if [[ -d "$OMARCHY_ROOT/themes/$name" ]]; then
+    refuse "'$name' is one of Omarchy's own themes -- pick another name"
+  fi
+  # `omarchy theme install` clones into this directory, so a .git inside one
+  # means the contents came from someone else. Overwriting it is not ours to do.
+  if [[ -e "$dir/.git" ]]; then
+    refuse "'$name' was installed from a git repository -- Theme Forge will not overwrite it"
+  fi
+  # A symlink here is the user's own working copy living somewhere else. Writing
+  # through it would write to a directory they did not name.
+  if [[ -L $dir ]]; then
+    refuse "'$name' is a symlink to a working copy -- edit it there instead"
+  fi
+  printf '%s' "$name"
+}
+
+# ------------------------------------------------------------------ colours
+
+valid_hex() {
+  [[ ${1:-} =~ ^#[0-9a-f]{6}$ ]]
+}
+
+# ----------------------------------------------------------------- commands
+
+cmd_scratch() {
+  local dir
+  # Not `say "$(require_scratch)"`: refuse() exits, and inside a command
+  # substitution it exits the *subshell*, so the caller would see success and an
+  # empty path rather than the refusal.
+  dir=$(scratch_dir) || refuse "no private directory is available (tried \$XDG_RUNTIME_DIR and ~/.cache)" "$EXIT_NO_SCRATCH"
+  say "$dir"
+}
+
+# The desktop portal's file chooser, run here rather than straight from QML so
+# its reply passes the same byte ceiling as every other producer. A portal is
+# another program answering over D-Bus; nothing about it makes its output
+# self-limiting.
+cmd_pick() {
+  need_tool omarchy-file-select
+  # The chooser waits on a human, so it gets its own generous deadline rather
+  # than the request budget -- but it still gets one.
+  BOUNDED_OUT=$(timeout 600 omarchy-file-select \
+      --title "Background image for this theme" \
+      --extensions "png jpg jpeg webp" 2>/dev/null | head -c $(( PATH_CAP + 1 )))
+  local status=${PIPESTATUS[0]}
+  (( $(printf '%s' "$BOUNDED_OUT" | wc -c) > PATH_CAP )) && refuse "that path is longer than this system can open" "$EXIT_TOO_BIG"
+  (( status != 0 )) && exit "$status"
+  say "$BOUNDED_OUT"
+}
+
+cmd_probe() {
+  local path="${1:-}"
+  [[ -n $path ]] || refuse "probe needs a path"
+  need_tool python3
+  timeout "$(remaining)" python3 "$READER" probe "$path"
+  local status=$?
+  (( status == 124 )) && refuse "reading that image took too long" "$EXIT_TIMEOUT"
+  exit "$status"
+}
+
+cmd_quantize() {
+  local path="${1:-}" count="${2:-6}" bin
+  [[ -n $path ]] || refuse "quantize needs a path"
+  case "$count" in ''|*[!0-9]*) count=6 ;; esac
+  (( count < 2 )) && count=2
+  (( count > 12 )) && count=12
+
+  # The probe is the gate: nothing reaches a decoder until the file's own header
+  # has been read and its declared size refused.
+  need_tool python3
+  timeout "$(remaining)" python3 "$READER" probe "$path" >/dev/null || exit $?
+
+  bin=$(magick_bin) || refuse "ImageMagick is not installed" "$EXIT_NO_TOOL"
+
+  # -alpha remove -alpha off before the histogram, so every colour comes back as
+  # six hex digits rather than eight.
+  run_bounded "$QUANTIZE_CAP" "$bin" "${IM_LIMITS[@]}" "$path" \
+    -auto-orient -resize 320x320 -alpha remove -alpha off \
+    -depth 8 -colors "$count" -format %c histogram:info:-
+  local status=$?
+  (( status == EXIT_TOO_BIG )) && refuse "that image produced more colour data than expected" "$EXIT_TOO_BIG"
+  (( status == EXIT_TIMEOUT )) && refuse "reading the colours out of that image took too long" "$EXIT_TIMEOUT"
+  (( status != 0 )) && refuse "ImageMagick could not read that image"
+
+  # Sort by pixel count so the dominant colours come first. The input is at most
+  # `count` rows and was byte-capped before it got here, so the sort -- which
+  # must consume all of its input before emitting anything -- is bounded by the
+  # ceiling already applied upstream of it, not by this pipeline.
+  printf '%s\n' "$BOUNDED_OUT" \
+    | sed -n 's/^ *\([0-9]\{1,12\}\):.*\(#[0-9A-Fa-f]\{6\}\).*$/\1 \2/p' \
+    | sort -rn -k1,1 \
+    | head -n "$count" \
+    | awk '{ print tolower($2) }'
+}
+
+cmd_thumb() {
+  local path="${1:-}" dir bin out tmp
+  [[ -n $path ]] || refuse "thumb needs a path"
+  need_tool python3
+  timeout "$(remaining)" python3 "$READER" probe "$path" >/dev/null || exit $?
+
+  dir=$(require_scratch) || exit $?
+  bin=$(magick_bin) || refuse "ImageMagick is not installed" "$EXIT_NO_TOOL"
+  out="$dir/preview.jpg"
+  tmp="$dir/preview.jpg.new"
+
+  timeout "$(remaining)" "$bin" "${IM_LIMITS[@]}" "$path" \
+      -auto-orient -thumbnail 1280x720 -strip -quality 88 JPEG:- 2>/dev/null \
+    | write_new "$tmp" "$IMAGE_CAP"
+  if (( PIPESTATUS[0] != 0 )) || [[ ! -f $tmp ]]; then
+    rm -f -- "$tmp"
+    refuse "could not make a preview of that image"
+  fi
+  mv -f -- "$tmp" "$out" || refuse "could not write the preview"
+  say "$out"
+}
+
+# Read `key=value` lines from stdin. Anything that is not a known key with a
+# valid value contributes nothing, so a malformed line degrades the wallpaper
+# rather than reaching ImageMagick as an argument.
+read_palette_stdin() {
+  local body line key value
+  body=$(head -c "$TOML_CAP")
+  P_BG="" P_DARKER="" P_ACCENT="" P_MODE="dark"
+  while IFS= read -r line; do
+    key=${line%%=*}
+    value=${line#*=}
+    case "$key" in
+      mode) [[ $value == "light" ]] && P_MODE="light" ;;
+      background) valid_hex "$value" && P_BG=$value ;;
+      darker_background) valid_hex "$value" && P_DARKER=$value ;;
+      accent) valid_hex "$value" && P_ACCENT=$value ;;
+    esac
+  done <<<"$body"
+  [[ -n $P_BG && -n $P_DARKER && -n $P_ACCENT ]]
+}
+
+cmd_wallpaper() {
+  local name dir bin out tmp
+  local glow_edge glow_level streak_ground streak_level compose_op
+  name=$(require_writable_theme "${1:-}") || exit $?
+  read_palette_stdin || refuse "the palette on stdin was incomplete"
+
+  bin=$(magick_bin) || refuse "ImageMagick is not installed" "$EXIT_NO_TOOL"
+  dir="$THEMES_DIR/$name/backgrounds"
+  require_dir "$dir"
+  out="$dir/0-$name.jpg"
+  tmp="$dir/.0-$name.jpg.new"
+
+  # The bloom and the light traces have to be composited differently on a light
+  # theme than on a dark one, and it is not a matter of taste: Screen over a
+  # near-white ground does nothing at all, and Multiply against a layer whose
+  # surround is black turns the whole wallpaper black. So each mode gets the
+  # operator that has something to work with, and the layer's surround is the
+  # identity colour for that operator -- black for Screen, white for Multiply.
+  #
+  # +level compresses the layer toward its surround, which is how the effect is
+  # kept faint on the light side; -evaluate multiply does the same on the dark
+  # side. They are not interchangeable: scaling a white surround toward zero is
+  # exactly the black-wallpaper failure above.
+  if [[ $P_MODE == "light" ]]; then
+    compose_op="Multiply"
+    glow_edge="white"; glow_level="+level 78%,100%"
+    streak_ground="white"; streak_level="+level 88%,100%"
+  else
+    compose_op="Screen"
+    glow_edge="black"; glow_level="-evaluate multiply 0.24"
+    streak_ground="black"; streak_level="-evaluate multiply 0.42"
+  fi
+
+  # Composed at 1920x1080 and scaled up at the end. Everything but the grain is
+  # a smooth gradient, which loses nothing to the upscale, and it keeps the glow
+  # layer -- which has to be far larger than the canvas for its falloff to read
+  # as light rather than as a blob -- inside the 64 megapixel area limit. At 4K
+  # that same layer would be 81 megapixels on its own.
+  #
+  # The grain goes on afterwards, at full size, so it stays fine rather than
+  # being doubled along with everything else.
+  # shellcheck disable=SC2086  # the *_level values are fixed operator strings chosen above
+  timeout "$(remaining)" "$bin" "${IM_LIMITS[@]}" \
+      -size 1920x1080 "gradient:${P_DARKER}-${P_BG}" \
+      \( -size 4500x4500 "radial-gradient:${P_ACCENT}-${glow_edge}" $glow_level \) \
+      -gravity NorthWest -geometry -375-2625 -compose "$compose_op" -composite \
+      \( -size 1920x1080 "xc:${streak_ground}" -fill none -stroke "${P_ACCENT}" -strokewidth 3 \
+         -draw "line -450,1290 2400,-390 line -450,1500 2400,-180 line -450,1740 2400,60 line -450,2100 2400,420" \
+         -blur 0x9 $streak_level \) \
+      -gravity Center -compose "$compose_op" -composite \
+      -resize "${WALLPAPER_WIDTH}x${WALLPAPER_HEIGHT}!" \
+      \( -size 480x270 xc:gray50 -attenuate 0.20 +noise Gaussian \
+         -resize "${WALLPAPER_WIDTH}x${WALLPAPER_HEIGHT}!" -blur 0x0.6 \) \
+      -gravity Center -compose Overlay -composite \
+      -quality 92 JPEG:- 2>/dev/null \
+    | write_new "$tmp" "$IMAGE_CAP" 0644
+  if (( PIPESTATUS[0] != 0 )) || [[ ! -f $tmp ]]; then
+    rm -f -- "$tmp"
+    refuse "could not draw the background"
+  fi
+  mv -f -- "$tmp" "$out" || refuse "could not write the background"
+  say "$out"
+}
+
+cmd_adopt() {
+  local name path dir bin out tmp
+  name=$(require_writable_theme "${1:-}") || exit $?
+  path="${2:-}"
+  [[ -n $path ]] || refuse "adopt needs a path"
+
+  # Re-probed here rather than trusted from the earlier probe: this is a second
+  # open of a path the plugin does not own, and what was checked a moment ago is
+  # not necessarily what is there now.
+  need_tool python3
+  timeout "$(remaining)" python3 "$READER" probe "$path" >/dev/null || exit $?
+
+  bin=$(magick_bin) || refuse "ImageMagick is not installed" "$EXIT_NO_TOOL"
+  dir="$THEMES_DIR/$name/backgrounds"
+  require_dir "$dir"
+  out="$dir/0-$name.jpg"
+  tmp="$dir/.0-$name.jpg.new"
+
+  # Re-encoded rather than copied. A copy would carry the original's metadata
+  # into a directory the user may publish, and would leave the theme holding a
+  # file this plugin never decoded successfully.
+  timeout "$(remaining)" "$bin" "${IM_LIMITS[@]}" "$path" \
+      -auto-orient -resize "${WALLPAPER_WIDTH}x${WALLPAPER_HEIGHT}^" \
+      -gravity Center -extent "${WALLPAPER_WIDTH}x${WALLPAPER_HEIGHT}" \
+      -strip -quality 92 JPEG:- 2>/dev/null \
+    | write_new "$tmp" "$IMAGE_CAP" 0644
+  if (( PIPESTATUS[0] != 0 )) || [[ ! -f $tmp ]]; then
+    rm -f -- "$tmp"
+    refuse "could not use that image as a background"
+  fi
+  mv -f -- "$tmp" "$out" || refuse "could not write the background"
+  say "$out"
+}
+
+# Every line colors.toml is allowed to contain. Anything else and the whole file
+# is refused: a partly-valid theme that still parses is worse than no theme,
+# because it is silently wrong and Omarchy will happily apply it.
+toml_line_ok() {
+  local line="$1"
+  [[ -z $line ]] && return 0
+  [[ $line == \#* ]] && return 0
+  [[ $line =~ ^mode\ =\ \"(dark|light)\"$ ]] && return 0
+  [[ $line =~ ^[a-z_]{1,32}\ =\ \"#[0-9a-f]{6}\"$ ]] && return 0
+  [[ $line =~ ^hyprland_active_border\ =\ \"rgba\([0-9a-f]{8}\)\ rgba\([0-9a-f]{8}\)\ 45deg\"$ ]] && return 0
+  [[ $line =~ ^hyprland_inactive_border\ =\ \"rgba\([0-9a-f]{8}\)\"$ ]] && return 0
+  return 1
+}
+
+cmd_save() {
+  local name dir body line count tmp
+  name=$(require_writable_theme "${1:-}") || exit $?
+
+  body=$(head -c $(( TOML_CAP + 1 )))
+  if (( $(printf '%s' "$body" | wc -c) > TOML_CAP )); then
+    refuse "that palette is larger than a colors.toml has any reason to be" "$EXIT_TOO_BIG"
+  fi
+  [[ -n $body ]] || refuse "nothing arrived on stdin"
+
+  count=0
+  while IFS= read -r line; do
+    count=$(( count + 1 ))
+    (( count > 200 )) && refuse "that palette has more lines than a colors.toml has any reason to"
+    toml_line_ok "$line" || refuse "refusing to write a colors.toml containing: $line"
+  done <<<"$body"
+
+  dir="$THEMES_DIR/$name"
+  require_dir "$dir"
+  require_dir "$dir/backgrounds"
+  tmp="$dir/.colors.toml.new"
+  printf '%s\n' "$body" | write_new "$tmp" "$TOML_CAP" 0644 || refuse "could not write $tmp"
+  mv -f -- "$tmp" "$dir/colors.toml" || refuse "could not write $dir/colors.toml"
+  say "$dir"
+}
+
+cmd_apply() {
+  local name
+  name=$(require_name "${1:-}") || exit $?
+  [[ -d "$THEMES_DIR/$name" || -d "$OMARCHY_ROOT/themes/$name" ]] \
+    || refuse "there is no theme called '$name'"
+  need_tool omarchy-theme-set
+  # Its output is progress chatter; the exit code is the answer.
+  timeout "$(remaining)" omarchy-theme-set "$name" >/dev/null 2>&1
+  local status=$?
+  (( status == 124 )) && refuse "applying the theme took too long" "$EXIT_TIMEOUT"
+  (( status != 0 )) && refuse "omarchy-theme-set refused '$name'"
+  say "$name"
+}
+
+cmd_list() {
+  run_bounded "$LIST_CAP" find "$THEMES_DIR" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' \
+    || refuse "could not list your themes"
+  say "$BOUNDED_OUT"
+}
+
+# The user themes Theme Forge will *not* write to, and the UI needs to know
+# before it offers. Same two rules require_writable_theme enforces: a theme
+# cloned from a git repository came from someone else, and a symlinked one is a
+# working copy living somewhere this has no business writing through.
+cmd_locked() {
+  local name
+  while IFS= read -r name; do
+    [[ -n $name ]] || continue
+    if [[ -L "$THEMES_DIR/$name" || -e "$THEMES_DIR/$name/.git" ]]; then
+      say "$name"
+    fi
+  done < <(find "$THEMES_DIR" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' 2>/dev/null | head -c "$LIST_CAP")
+}
+
+cmd_stock() {
+  run_bounded "$LIST_CAP" find "$OMARCHY_ROOT/themes" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' \
+    || refuse "could not list Omarchy's themes"
+  say "$BOUNDED_OUT"
+}
+
+cmd_current() {
+  need_tool python3
+  timeout "$(remaining)" python3 "$READER" read "$CURRENT_NAME_FILE" 128 2>/dev/null
+  exit 0
+}
+
+cmd_load() {
+  local name path
+  name=$(require_name "${1:-}") || exit $?
+  path="$THEMES_DIR/$name/colors.toml"
+  [[ -f $path ]] || path="$OMARCHY_ROOT/themes/$name/colors.toml"
+  need_tool python3
+  timeout "$(remaining)" python3 "$READER" read "$path" "$TOML_CAP"
+  exit $?
+}
+
+cmd_draft_save() {
+  local dir body tmp
+  dir=$(state_dir) || refuse "could not create $STATE_DIR"
+  body=$(head -c $(( DRAFT_CAP + 1 )))
+  if (( $(printf '%s' "$body" | wc -c) > DRAFT_CAP )); then
+    refuse "that draft is larger than expected" "$EXIT_TOO_BIG"
+  fi
+  tmp="$dir/.draft.json.new"
+  printf '%s\n' "$body" | write_new "$tmp" "$DRAFT_CAP" || refuse "could not write the draft"
+  mv -f -- "$tmp" "$dir/draft.json" || refuse "could not write the draft"
+}
+
+cmd_draft_load() {
+  local dir
+  dir=$(state_dir) || exit 0
+  need_tool python3
+  timeout "$(remaining)" python3 "$READER" read "$dir/draft.json" "$DRAFT_CAP" 2>/dev/null
+  exit 0
+}
+
+# --------------------------------------------------------------- dispatch
+
+command="${1:-}"
+shift 2>/dev/null || true
+
+case "$command" in
+  scratch)    cmd_scratch "$@" ;;
+  pick)       cmd_pick "$@" ;;
+  probe)      cmd_probe "$@" ;;
+  quantize)   cmd_quantize "$@" ;;
+  thumb)      cmd_thumb "$@" ;;
+  wallpaper)  cmd_wallpaper "$@" ;;
+  adopt)      cmd_adopt "$@" ;;
+  save)       cmd_save "$@" ;;
+  apply)      cmd_apply "$@" ;;
+  list)       cmd_list "$@" ;;
+  locked)     cmd_locked "$@" ;;
+  stock)      cmd_stock "$@" ;;
+  current)    cmd_current "$@" ;;
+  load)       cmd_load "$@" ;;
+  draft-save) cmd_draft_save "$@" ;;
+  draft-load) cmd_draft_load "$@" ;;
+  *)          refuse "unknown command '${command}'" ;;
+esac

@@ -96,6 +96,12 @@ Four steps. The last one checks the first three.
 omarchy plugin add git@github.com:kairos-tech-oh/omarchy-theme-forge.git --enable
 ```
 
+It will show you the URL and warn that plugins run as unsandboxed code inside
+your long-lived `omarchy-shell` process, then ask you to confirm. That warning
+is correct and applies to this plugin as much as any other — the code is short
+and commented, and `SUBMISSION-NOTES.md` walks through everything it touches.
+Add `--yes` if you are scripting it and have already read the code.
+
 `--enable` matters: a third-party plugin has to be listed in
 `~/.config/omarchy/shell.json` before the shell will load it at all. If you
 installed without it:

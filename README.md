@@ -18,6 +18,7 @@ a real theme directory and apply it, with one click to put your old theme back.
 - [Requirements](#requirements)
 - [Setup](#setup)
 - [Quick start](#quick-start)
+- [The tour](#the-tour)
 - [The window](#the-window)
 - [Using it](#using-it)
   - [Mode](#mode)
@@ -31,6 +32,7 @@ a real theme directory and apply it, with one click to put your old theme back.
   - [Saving, applying, reverting](#saving-applying-reverting)
   - [Opening a theme you already have](#opening-a-theme-you-already-have)
   - [Drafts](#drafts)
+- [Settings](#settings)
 - [The `theme-forge` command](#the-theme-forge-command)
 - [What a theme actually is](#what-a-theme-actually-is)
 - [Publishing a theme you made](#publishing-a-theme-you-made)
@@ -208,6 +210,28 @@ Nothing is written until step 5, and nothing is applied until you ask.
 
 ---
 
+## The tour
+
+The first time you open Theme Forge it runs a five-step tour. Each step dims the
+window and lights up the part it is talking about — the editor, the preview, the
+save buttons — so it tells you *where* things are rather than just what they do.
+
+| | |
+|---|---|
+| `→` / `Enter` | next |
+| `←` | back |
+| `Space` | tick "Don't show this again" |
+| `Esc` | skip |
+
+Tick the box and it will not come back. Skipping without ticking leaves your
+preference alone, so if you have asked for the tour on every open you still get
+it next time.
+
+You can bring it back whenever you like from [Settings](#settings), or with
+`theme-forge settings`.
+
+---
+
 ## The window
 
 Theme Forge is a normal window, so your window manager owns it: move it, resize
@@ -373,6 +397,24 @@ the window, so closing it mid-design loses nothing.
 
 ---
 
+## Settings
+
+The **SETTINGS** button in the header, or `theme-forge settings`.
+
+- **Show the tour when Theme Forge opens** — off after you have seen it once.
+  Turn it back on and it runs every time; there is also a **Take the tour now**
+  button that runs it straight away.
+- **Translucency** — how much of your wallpaper reads through the window. The
+  preview and every swatch stay fully opaque whatever you set, so the colours you
+  are judging are never tinted by what is behind the window. Hyprland applies its
+  own window opacity on top of this.
+- **Where things are** — the paths this plugin reads and writes.
+
+Preferences live in `~/.local/state/kairos.theme-forge/prefs.json`, separately
+from the palette draft, so clearing a draft never loses them.
+
+---
+
 ## The `theme-forge` command
 
 ```
@@ -380,6 +422,7 @@ theme-forge                 open the designer (toggles it, like the keybinding)
 theme-forge open            open it
 theme-forge close           close it
 theme-forge edit <name>     open it with an existing theme loaded
+theme-forge settings        open it on the settings page
 theme-forge list            what is installed, and which are yours to edit
 theme-forge doctor          check the install and its dependencies
 theme-forge help            usage
@@ -607,6 +650,16 @@ omarchy restart shell
 ```
 
 ---
+
+## Credits
+
+The controls wear a variation on the **glow** preset from
+[Rice Bar](https://github.com/jcarcinogen/omarchy-rice-bar) by Scott Angel
+(MIT) — a dark surface, a border in the theme's Hyprland active-border colour,
+and two fainter rings inset behind it. The implementation here is its own, but
+the recipe came from reading that plugin, and the approach did too: Rice Bar
+decorates the stock bar rather than replacing it, and these controls decorate
+the shell's own `Button` rather than reimplementing one.
 
 ## License
 

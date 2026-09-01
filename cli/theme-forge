@@ -18,6 +18,7 @@
 #   theme-forge                open the designer (toggles, like the keybinding)
 #   theme-forge open|close
 #   theme-forge edit <name>    open it with an existing theme loaded
+#   theme-forge settings       open it on the settings page
 #   theme-forge list           what is installed, and which are yours to edit
 #   theme-forge doctor         check the install and its dependencies
 #   theme-forge help
@@ -77,6 +78,12 @@ valid_name() {
 cmd_open() { require_installed; require_enabled; omarchy-shell shell summon "$PLUGIN_ID" '{}' >/dev/null; }
 cmd_close() { require_installed; omarchy-shell shell hide "$PLUGIN_ID" >/dev/null; }
 cmd_toggle() { require_installed; require_enabled; omarchy-shell shell toggle "$PLUGIN_ID" '{}' >/dev/null; }
+
+cmd_settings() {
+  require_installed
+  require_enabled
+  omarchy-shell shell summon "$PLUGIN_ID" '{"page":"settings"}' >/dev/null
+}
 
 cmd_edit() {
   local name="${1:-}"
@@ -370,6 +377,7 @@ ${BOLD}theme-forge${OFF} -- the Omarchy theme designer
   ${BOLD}theme-forge open${OFF}            open it
   ${BOLD}theme-forge close${OFF}           close it
   ${BOLD}theme-forge edit${OFF} <name>     open it with an existing theme loaded
+  ${BOLD}theme-forge settings${OFF}        open it on the settings page
   ${BOLD}theme-forge list${OFF}            what is installed, and which are yours to edit
   ${BOLD}theme-forge doctor${OFF}          check the install and its dependencies
   ${BOLD}theme-forge help${OFF}            this
@@ -383,6 +391,7 @@ case "${1:-toggle}" in
   open|show)        cmd_open ;;
   close|hide)       cmd_close ;;
   edit)             shift; cmd_edit "$@" ;;
+  settings)         cmd_settings ;;
   list|ls)          cmd_list ;;
   doctor|check)     cmd_doctor ;;
   help|-h|--help)   cmd_help ;;

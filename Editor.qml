@@ -83,7 +83,7 @@ Item {
         font.bold: true
       }
 
-      TextField {
+      RiceField {
         id: nameField
         width: parent.width
         placeholderText: "lowercase-name"
@@ -93,6 +93,8 @@ Item {
         font.family: forge.monoFont
         onTextChanged: forge.themeName = text
         onAccepted: forge.save(false)
+        tint: forge.surface
+        fillAlpha: forge.surfaceAlpha
       }
 
       Text {
@@ -132,16 +134,17 @@ Item {
         Repeater {
           id: repeater
           model: forge.userThemes
-          delegate: Button {
+          delegate: RiceButton {
             required property string modelData
             text: modelData
-            bordered: true
             fontSize: Style.font.caption
             verticalPadding: Style.space(2)
             horizontalPadding: Style.space(6)
             foreground: forge.dim
             enabled: !forge.busy
             onClicked: forge.loadTheme(modelData)
+            tint: forge.surface
+            fillAlpha: forge.surfaceAlpha
           }
         }
       }
@@ -154,24 +157,34 @@ Item {
         width: parent.width
         spacing: Style.spacing.controlGap
 
-        // qs.Ui's own segmented control, so the mode switch looks and behaves
-        // like every other one in the shell rather than like a pair of buttons
-        // that happen to sit next to each other.
-        ButtonGroup {
+        // Two buttons rather than qs.Ui's segmented ButtonGroup. The kit's
+        // control draws its own flat chrome and cannot be decorated the way
+        // Button can, so sitting between two glow pills it read as the one
+        // control that had been left out. A pair of RiceButtons with `selected`
+        // is the same affordance wearing the same surface as everything else.
+        Row {
           anchors.verticalCenter: parent.verticalCenter
-          options: ["dark", "light"]
-          value: editor.spec.mode
-          foreground: forge.ink
-          background: forge.surface
-          accent: forge.colors.accent
-          fontFamily: forge.uiFont
-          fontSize: Style.font.caption
-          onChanged: function (value) { forge.setMode(value) }
+          spacing: Style.space(4)
+
+          Repeater {
+            model: ["dark", "light"]
+            delegate: RiceButton {
+              required property string modelData
+              text: modelData
+              fontSize: Style.font.caption
+              selected: editor.spec.mode === modelData
+              foreground: selected ? forge.colors.accent : forge.dim
+              accent: forge.colors.accent
+              tint: forge.surface
+              fillAlpha: forge.surfaceAlpha
+              onClicked: forge.setMode(modelData)
+            }
+          }
         }
 
         Item { width: Style.space(4); height: 1 }
 
-        TextField {
+        RiceField {
           id: seedField
           width: Style.space(84)
           text: String(editor.spec.seed)
@@ -179,15 +192,19 @@ Item {
           accent: forge.colors.accent
           font.family: forge.monoFont
           onAccepted: forge.rollSeed(text)
+          tint: forge.surface
+          fillAlpha: forge.surfaceAlpha
         }
 
-        Button {
+        RiceButton {
           text: "Roll"
-          bordered: true
           foreground: forge.colors.accent
           accent: forge.colors.accent
-          tooltipText: "A new random colors that passes its own contrast bands"
+          tooltipText: "A new random palette that passes its own contrast bands"
           onClicked: forge.roll()
+          tint: forge.surface
+          fillAlpha: forge.surfaceAlpha
+          selected: true
         }
       }
 
@@ -197,26 +214,27 @@ Item {
         width: parent.width
         spacing: Style.spacing.controlGap
 
-        Button {
+        RiceButton {
           text: forge.sourceImage === "" ? "Use an image" : "Change image"
-          bordered: true
           foreground: forge.ink
           enabled: !forge.busy && forge.imagesUsable()
-          opacity: enabled ? 1 : 0.4
           tooltipText: forge.imagesUsable()
-            ? "Seed the colors from a picture, and use it as the background"
+            ? "Seed the palette from a picture, and use it as the background"
             : forge.imageBlockedReason()
           onClicked: forge.pickImage()
+          tint: forge.surface
+          fillAlpha: forge.surfaceAlpha
         }
 
-        Button {
+        RiceButton {
           visible: forge.sourceImage !== ""
           text: "Drop it"
-          bordered: true
           foreground: forge.dim
           enabled: !forge.busy
-          tooltipText: "Go back to a background drawn from the colors"
+          tooltipText: "Go back to a background drawn from the palette"
           onClicked: forge.clearImage()
+          tint: forge.surface
+          fillAlpha: forge.surfaceAlpha
         }
       }
 
@@ -270,17 +288,18 @@ Item {
           font.letterSpacing: 1
         }
 
-        Button {
+        RiceButton {
           anchors.verticalCenter: parent.verticalCenter
           visible: forge.isPinned(editor.selectedKey)
           text: "unpin"
           fontSize: Style.font.caption
           verticalPadding: Style.space(1)
           horizontalPadding: Style.space(5)
-          bordered: true
           foreground: forge.dim
           tooltipText: "Let this colour be derived again"
           onClicked: forge.clearPin(editor.selectedKey)
+          tint: forge.surface
+          fillAlpha: forge.surfaceAlpha
         }
       }
 
@@ -297,7 +316,7 @@ Item {
           border.color: forge.hairline
         }
 
-        TextField {
+        RiceField {
           id: hexField
           width: Style.space(104)
           text: editor.selectedHex
@@ -309,6 +328,8 @@ Item {
             if (value === "") { text = editor.selectedHex; return }
             forge.setColor(editor.selectedKey, value)
           }
+          tint: forge.surface
+          fillAlpha: forge.surfaceAlpha
         }
 
         Text {

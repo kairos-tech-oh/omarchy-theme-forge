@@ -30,6 +30,8 @@
 #   load <name>              print an existing theme's colors.toml
 #   draft-save               store the in-progress palette, read from stdin
 #   draft-load               print it back
+#   prefs-save               store the user's preferences, read from stdin
+#   prefs-load               print them back
 #
 # Exit codes are the interface. 0 is fine, 1 is a refusal with a reason on
 # stderr, and anything the QML side needs to distinguish gets its own number.
@@ -58,6 +60,11 @@ TOML_CAP=16384
 
 # The draft is one JSON object of a few dozen hex strings.
 DRAFT_CAP=65536
+
+# Preferences are a handful of booleans and a number. Kept separate from the
+# draft on purpose: the draft is work in progress and is cleared freely, while
+# "I have seen the tutorial" has to survive that.
+PREFS_CAP=8192
 
 # A theme name is at most 32 characters; a directory listing of them is small.
 LIST_CAP=32768
@@ -611,6 +618,26 @@ cmd_draft_save() {
   mv -f -- "$tmp" "$dir/draft.json" || refuse "could not write the draft"
 }
 
+cmd_prefs_save() {
+  local dir body tmp
+  dir=$(state_dir) || refuse "could not create $STATE_DIR"
+  body=$(head -c $(( PREFS_CAP + 1 )))
+  if (( $(printf '%s' "$body" | wc -c) > PREFS_CAP )); then
+    refuse "those preferences are larger than expected" "$EXIT_TOO_BIG"
+  fi
+  tmp="$dir/.prefs.json.new"
+  printf '%s\n' "$body" | write_new "$tmp" "$PREFS_CAP" || refuse "could not write the preferences"
+  mv -f -- "$tmp" "$dir/prefs.json" || refuse "could not write the preferences"
+}
+
+cmd_prefs_load() {
+  local dir
+  dir=$(state_dir) || exit 0
+  need_tool python3
+  timeout "$(remaining)" python3 "$READER" read "$dir/prefs.json" "$PREFS_CAP" 2>/dev/null
+  exit 0
+}
+
 cmd_draft_load() {
   local dir
   dir=$(state_dir) || exit 0
@@ -640,6 +667,8 @@ case "$command" in
   current)    cmd_current "$@" ;;
   load)       cmd_load "$@" ;;
   draft-save) cmd_draft_save "$@" ;;
+  prefs-save) cmd_prefs_save "$@" ;;
+  prefs-load) cmd_prefs_load "$@" ;;
   draft-load) cmd_draft_load "$@" ;;
   *)          refuse "unknown command '${command}'" ;;
 esac

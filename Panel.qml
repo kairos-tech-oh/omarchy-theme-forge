@@ -88,6 +88,21 @@ Item {
     }
     if (wanted !== "") root.loadTheme(wanted)
 
+    // `{"page":"settings"}` opens straight onto the settings page, which is what
+    // `theme-forge settings` sends. Validated the same way the theme name is:
+    // it arrives from outside the plugin, so an unknown value falls back to the
+    // designer rather than leaving the window on nothing.
+    var wantedPage = "design"
+    try {
+      var pagePayload = JSON.parse(String(payloadJson || "{}"))
+      if (pagePayload && pagePayload.page === "settings") wantedPage = "settings"
+    } catch (error) {
+      wantedPage = "design"
+    }
+    root.page = wantedPage
+
+    root.maybeStartTutorial()
+
     Qt.callLater(function () { keyCatcher.forceActiveFocus() })
   }
 
@@ -229,6 +244,87 @@ Item {
     root.setSpec(next)
   }
 
+  // ----------------------------------------------------------- preferences
+  //
+  // How the tool behaves, as opposed to what a theme looks like. Kept in its
+  // own file rather than in the draft: a draft is work in progress and gets
+  // cleared, and "I have already seen the tour" has to survive that.
+  //
+  // `prefsLoaded` gates the first-run decision. Reading them is a subprocess,
+  // so at the first open they are simply not here yet -- and showing the tour
+  // to someone who has already dismissed it, because the answer had not
+  // arrived, is exactly the bug worth designing out.
+
+  property bool prefsLoaded: false
+  property bool tutorialSeen: false
+  property bool showTutorialOnOpen: false
+  property real surfaceAlpha: 0.90
+  property bool tutorialOpen: false
+  property string page: "design"     // design | settings
+
+  function setPref(key, value) {
+    if (key === "showTutorialOnOpen") root.showTutorialOnOpen = value === true
+    else if (key === "tutorialSeen") root.tutorialSeen = value === true
+    else if (key === "surfaceAlpha") root.surfaceAlpha = Math.max(0.60, Math.min(1.0, Number(value) || 0.90))
+    else return
+    root.savePrefs()
+  }
+
+  function savePrefs() {
+    prefsSaveProc.payload = JSON.stringify({
+      tutorialSeen: root.tutorialSeen,
+      showTutorialOnOpen: root.showTutorialOnOpen,
+      surfaceAlpha: root.surfaceAlpha
+    })
+    prefsSaveProc.stdinEnabled = true
+    prefsSaveProc.running = true
+  }
+
+  function loadPrefs(text) {
+    var data = null
+    try {
+      data = JSON.parse(text)
+    } catch (error) {
+      data = null
+    }
+    if (data && typeof data === "object") {
+      root.tutorialSeen = data.tutorialSeen === true
+      root.showTutorialOnOpen = data.showTutorialOnOpen === true
+      var alpha = Number(data.surfaceAlpha)
+      if (isFinite(alpha)) root.surfaceAlpha = Math.max(0.60, Math.min(1.0, alpha))
+    }
+    root.prefsLoaded = true
+    root.maybeStartTutorial()
+  }
+
+  // Called both when the window opens and when the preferences arrive, because
+  // either can be last. A function rather than a handler on one of them: which
+  // one wins is a race, and a guard that only runs on the loser never runs.
+  function maybeStartTutorial() {
+    if (!root.opened || !root.prefsLoaded || root.tutorialOpen) return
+    // Never over Settings: every step but the first points at something in the
+    // designer, and pointing at a pane that is not on screen is worse than not
+    // running at all.
+    if (root.page !== "design") return
+    if (root.tutorialSeen && !root.showTutorialOnOpen) return
+    root.startTutorial()
+  }
+
+  function startTutorial() {
+    root.page = "design"
+    root.tutorialOpen = true
+  }
+
+  // `suppress` is the checkbox in the tour. Finishing it always records that it
+  // has been seen; ticking the box also turns off the "show it every time"
+  // preference, so the two together mean "never again unless I ask".
+  function finishTutorial(suppress) {
+    root.tutorialOpen = false
+    root.tutorialSeen = true
+    if (suppress) root.showTutorialOnOpen = false
+    root.savePrefs()
+  }
+
   // ---------------------------------------------------------------- status
 
   property string status: ""
@@ -312,7 +408,7 @@ Item {
   function clearImage() {
     root.sourceImage = ""
     root.previewImage = ""
-    root.setStatus("Back to a background drawn from the colors.", "info")
+    root.setStatus("Back to a background drawn from the palette.", "info")
   }
 
   // ------------------------------------------------------------- the draft
@@ -395,7 +491,7 @@ Item {
       adoptProc.running = true
       return
     }
-    root.setStatus("Drawing a background from the colors...", "info")
+    root.setStatus("Drawing a background from the palette...", "info")
     wallpaperProc.payload = ["mode=" + root.colors.mode,
                              "background=" + root.colors.background,
                              "darker_background=" + root.colors.darker_background,
@@ -513,6 +609,36 @@ Item {
         if (root.themeAtOpen === "") root.themeAtOpen = name
       }
     }
+  }
+
+  Process {
+    id: prefsLoadProc
+    command: [root.helperPath, "prefs-load"]
+    property bool sawOutput: false
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        prefsLoadProc.sawOutput = true
+        root.loadPrefs(text)
+      }
+    }
+    onExited: function (exitCode) {
+      // Whether onExited or onStreamFinished fires first is not ordered, and
+      // this used to guard on prefsLoaded -- which the *fallback itself* sets.
+      // Winning the race then meant the defaults were applied and the real
+      // preferences, arriving a moment later, could not undo a tour that had
+      // already been started from them. Guard on whether stdout was seen, which
+      // is the actual question being asked.
+      if (!prefsLoadProc.sawOutput) root.loadPrefs("")
+    }
+  }
+
+  Process {
+    id: prefsSaveProc
+    property string payload: ""
+    command: [root.helperPath, "prefs-save"]
+    stdinEnabled: true
+    onStarted: { write(payload); payload = ""; stdinEnabled = false }
   }
 
   Process {
@@ -700,7 +826,10 @@ Item {
     }
   }
 
-  Component.onCompleted: scratchProc.running = true
+  Component.onCompleted: {
+    scratchProc.running = true
+    prefsLoadProc.running = true
+  }
   // ------------------------------------------------------------------- chrome
   //
   // Theme Forge's own colours come from the Color singleton, which is the
@@ -732,7 +861,6 @@ Item {
   // theme's own background and never against the wallpaper behind the window.
   // A translucent preview would make this tool lie about the thing it exists to
   // show.
-  readonly property real surfaceAlpha: 0.90
   readonly property color surface: Qt.rgba(Color.menu.background.r,
                                            Color.menu.background.g,
                                            Color.menu.background.b,
@@ -799,6 +927,7 @@ Item {
       }
 
       Item {
+        id: content
         anchors.fill: parent
         anchors.margins: Style.spacing.panelPadding
 
@@ -836,18 +965,41 @@ Item {
             }
           }
 
-          Text {
+          Row {
+            id: headerRight
             anchors.right: parent.right
             anchors.verticalCenter: titleRow.verticalCenter
-            // The first thing to go when the window is narrow: the shortcuts
-            // are a reminder, and colliding with the title helps nobody.
-            visible: parent.width - titleRow.width - width > Style.space(24)
-            text: "CTRL+R ROLL   CTRL+S SAVE   CTRL+ENTER APPLY   ESC CLOSE"
-            textFormat: Text.PlainText
-            color: root.faint
-            font.family: root.uiFont
-            font.pixelSize: Style.font.caption
-            font.letterSpacing: 1
+            spacing: Style.space(14)
+
+            Text {
+              anchors.verticalCenter: parent.verticalCenter
+              // The first thing to go when the window is narrow: the shortcuts
+              // are a reminder, and colliding with the title helps nobody.
+              visible: header.width - titleRow.width - headerRight.width + width > Style.space(24)
+              text: "CTRL+R ROLL   CTRL+S SAVE   CTRL+ENTER APPLY   ESC CLOSE"
+              textFormat: Text.PlainText
+              color: root.faint
+              font.family: root.uiFont
+              font.pixelSize: Style.font.caption
+              font.letterSpacing: 1
+            }
+
+            RiceButton {
+              anchors.verticalCenter: parent.verticalCenter
+              text: root.page === "settings" ? "DESIGN" : "SETTINGS"
+              fontSize: Style.font.caption
+              verticalPadding: Style.space(3)
+              horizontalPadding: Style.space(8)
+              foreground: root.page === "settings" ? root.colors.accent : root.dim
+              accent: root.colors.accent
+              selected: root.page === "settings"
+              tint: root.surface
+              fillAlpha: root.surfaceAlpha
+              tooltipText: root.page === "settings"
+                ? "Back to the palette"
+                : "How Theme Forge behaves"
+              onClicked: root.page = root.page === "settings" ? "design" : "settings"
+            }
           }
         }
 
@@ -885,8 +1037,21 @@ Item {
           readonly property int stackedPreviewHeight:
             Math.min(Math.round(width * 0.58), Math.round(height * 0.46))
 
+          Settings {
+            id: settingsPage
+            anchors.fill: parent
+            visible: root.page === "settings"
+            forge: root
+            onClosed: root.page = "design"
+            onReplayTutorial: {
+              root.page = "design"
+              root.startTutorial()
+            }
+          }
+
           Editor {
             id: editorPane
+            visible: root.page === "design"
             forge: root
             x: 0
             y: body.wide ? 0 : body.stackedPreviewHeight + body.gap
@@ -895,6 +1060,7 @@ Item {
           }
 
           Rectangle {
+            visible: root.page === "design"
             x: body.wide ? editorPane.width + body.gap : 0
             y: body.wide ? 0 : body.stackedPreviewHeight + Math.round(body.gap / 2)
             width: body.wide ? 1 : body.width
@@ -903,6 +1069,8 @@ Item {
           }
 
           PreviewPane {
+            id: previewPane
+            visible: root.page === "design"
             forge: root
             compact: !body.wide
             x: body.wide ? editorPane.width + body.gap * 2 + 1 : 0
@@ -955,35 +1123,78 @@ Item {
             anchors.verticalCenter: parent.verticalCenter
             spacing: Style.spacing.controlGap
 
-            Button {
+            RiceButton {
               text: "Revert"
-              bordered: true
               enabled: !root.busy && root.themeAtOpen !== "" && root.themeAtOpen !== root.currentTheme
-              opacity: enabled ? 1 : 0.4
               tooltipText: root.themeAtOpen === "" ? "" : "Put " + root.themeAtOpen + " back"
               foreground: root.ink
+              tint: root.surface
+              fillAlpha: root.surfaceAlpha
               onClicked: root.revert()
             }
 
-            Button {
+            RiceButton {
               text: root.overwrites() ? "Overwrite" : "Save"
-              bordered: true
               enabled: !root.busy
-              opacity: enabled ? 1 : 0.4
               foreground: root.ink
+              tint: root.surface
+              fillAlpha: root.surfaceAlpha
               onClicked: root.save(false)
             }
 
-            Button {
+            RiceButton {
               text: "Save and apply"
-              bordered: true
               enabled: !root.busy
-              opacity: enabled ? 1 : 0.4
               foreground: root.colors.accent
               accent: root.colors.accent
+              selected: true
+              tint: root.surface
+              fillAlpha: root.surfaceAlpha
               onClicked: root.save(true)
             }
           }
+        }
+
+        // ------------------------------------------------------------- the tour
+        //
+        // Loaded only when it is running: a first-run tour that has been
+        // dismissed should not be sitting in the scene graph for the rest of
+        // the session. It takes the keyboard while it is up so Escape closes
+        // the tour rather than the window.
+        Loader {
+          id: tourLoader
+          anchors.fill: parent
+          anchors.margins: -Style.spacing.panelPadding
+          active: root.tutorialOpen
+          z: 50
+
+          // The content sits inside the window's padding; this Loader has been
+          // pushed back out to the window edge, so everything measured in
+          // content coordinates moves by that much to land here.
+          readonly property int pad: Style.spacing.panelPadding
+
+          sourceComponent: Tutorial {
+            forge: root
+            // The three things a step can point at, mapped into the tour's own
+            // coordinates. Bindings rather than a snapshot, so the spotlight
+            // follows the layout when the window is resized or folds.
+            editorRect: root.page === "design" && editorPane.visible
+              ? Qt.rect(tourLoader.pad + body.x + editorPane.x,
+                        tourLoader.pad + body.y + editorPane.y,
+                        editorPane.width, editorPane.height)
+              : Qt.rect(0, 0, 0, 0)
+            previewRect: root.page === "design" && previewPane.visible
+              ? Qt.rect(tourLoader.pad + body.x + previewPane.x,
+                        tourLoader.pad + body.y + previewPane.y,
+                        previewPane.width, previewPane.height)
+              : Qt.rect(0, 0, 0, 0)
+            actionsRect: Qt.rect(tourLoader.pad + footer.x + actions.x,
+                                 tourLoader.pad + footer.y + actions.y,
+                                 actions.width, actions.height)
+            onFinished: function (suppress) { root.finishTutorial(suppress) }
+          }
+          onLoaded: item.forceActiveFocus()
+          onActiveChanged: if (!active) keyCatcher.forceActiveFocus()
         }
       }
     }

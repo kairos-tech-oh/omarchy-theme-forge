@@ -46,6 +46,52 @@ layout that only worked at its opening size would be broken most of the time.
 `Image.source`. The only outside input is a file the user picks from the desktop
 portal.
 
+## The first-run tour, and preferences
+
+Two new pieces of state, both of them local and neither of them a new external
+surface:
+
+`~/.local/state/kairos.theme-forge/prefs.json` holds three values — whether the
+tour has been seen, whether it should run on every open, and the window's
+translucency. It is written through the same `reader.py write` path as
+everything else (`O_CREAT|O_EXCL|O_NOFOLLOW`, then a rename) and read back with
+the same bounded, no-follow reader at an 8 KiB cap. Deliberately a different
+file from the palette draft: a draft is work in progress and gets cleared, and
+"I have already seen the tour" has to survive that.
+
+The tour itself paints and nothing else — no palette changes, no file writes, no
+theme applied. It reports its own dismissal upward and the panel records it.
+
+One race worth naming, because it was live for a while and the symptom was
+subtle: the preferences read has both an `onStreamFinished` and an `onExited`,
+their order is not defined, and the fallback guarded on the very flag it sets.
+When `onExited` won, defaults were applied, the first-run decision was made from
+them, and the real preferences arriving a moment later could not unmake a tour
+that had already started. It now guards on whether stdout was actually seen,
+which is the question being asked.
+
+`theme-forge settings` sends `{"page":"settings"}` as the IPC payload. Like the
+`edit` payload it is parsed defensively and an unrecognised value falls back to
+the designer, so a malformed payload opens the window normally rather than
+leaving it on nothing.
+
+## The control styling
+
+`RiceSurface.qml`, `RiceButton.qml` and `RiceField.qml` adapt the **glow** preset
+from the Rice Bar plugin (Scott Angel, MIT), credited in the README. Two things
+about how, both of which keep the surface small:
+
+`RiceButton` is the shell's own `qs.Ui.Button` with `bordered: false` and a
+transparent background, drawn on top of a `RiceSurface`. `RiceField` swaps only
+`TextField.background`, which is a settable Item. Neither reimplements a control,
+so the tooltip, hover, press, focus ring and keyboard handling every other
+control in the shell has are still the shell's — and a later change there
+arrives here for free. That is also Rice Bar's own approach: it decorates the
+stock bar without replacing any of it.
+
+Nothing in any of the three reads external input. They take colours and numbers
+from the panel and paint.
+
 ## The shipped command
 
 `cli/theme-forge` is a front end for `omarchy-shell`'s IPC, not a second way to

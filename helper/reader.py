@@ -22,6 +22,9 @@ actually got. Nothing here ever stats a path and then opens it.
     reader.py write <path> <cap> [mode]
                                      stdin to a file that must not already exist
     reader.py probe <path>           prints "<format> <width> <height>"
+    reader.py image <path> <cap> <format>
+                                     the whole image to stdout, from one open, once
+                                     its header has passed the same probe
 
 Exit codes are the interface; stderr is for a human.
 
@@ -54,6 +57,10 @@ MAX_PIXELS = 40_000_000
 JPEG_SCAN_BYTES = 262144
 
 READ_CAP_MAX = 4 * 1024 * 1024
+
+# An encoded wallpaper. A 4K PNG measured 18 MiB; this is a hard ceiling on what
+# `image` will hold before handing the bytes on.
+IMAGE_CAP_MAX = 64 * 1024 * 1024
 
 # Writes carry encoded images, which are an order of magnitude larger than any
 # text file here; a measured 4K JPEG at quality 92 was 877 KiB.
@@ -140,8 +147,12 @@ def jpeg_size(data):
             index += 1
             continue
         marker = data[index + 1]
-        # Padding and the standalone markers carry no length field.
-        if marker in (0xFF, 0x01) or 0xD0 <= marker <= 0xD9:
+        # A fill byte is 0xFF followed by the real marker, so step one, not two.
+        if marker == 0xFF:
+            index += 1
+            continue
+        # The standalone markers carry no length field.
+        if marker == 0x01 or 0xD0 <= marker <= 0xD9:
             index += 2
             continue
         if index + 4 > limit:
@@ -185,14 +196,8 @@ def webp_size(data):
     return None
 
 
-def command_probe(path):
-    try:
-        head = read_bounded(path, JPEG_SCAN_BYTES)
-    except OSError as error:
-        return fail(EXIT_UNUSABLE, "cannot read that file (%s)" % error.strerror)
-    except ValueError as error:
-        return fail(EXIT_UNUSABLE, "cannot read that file (%s)" % error)
-
+def probe_bytes(head):
+    """(kind, width, height) for a header that passes, or an exit code."""
     for parser in (png_size, jpeg_size, webp_size):
         found = parser(head)
         if found is None:
@@ -204,10 +209,60 @@ def command_probe(path):
                 "that image declares %dx%d, past the %dx%d / %d megapixel ceiling"
                 % (width, height, MAX_DIMENSION, MAX_DIMENSION, MAX_PIXELS // 1_000_000),
             )
-        print("%s %d %d" % (kind, width, height))
-        return EXIT_OK
-
+        return (kind, width, height)
     return fail(EXIT_NOT_IMAGE, "that file is not a PNG, JPEG or WebP")
+
+
+def command_probe(path):
+    try:
+        head = read_bounded(path, JPEG_SCAN_BYTES)
+    except OSError as error:
+        return fail(EXIT_UNUSABLE, "cannot read that file (%s)" % error.strerror)
+    except ValueError as error:
+        return fail(EXIT_UNUSABLE, "cannot read that file (%s)" % error)
+
+    found = probe_bytes(head)
+    if isinstance(found, int):
+        return found
+    print("%s %d %d" % found)
+    return EXIT_OK
+
+
+def command_image(path, cap_text, expected):
+    """Stream an image to stdout so ImageMagick never sees the path.
+
+    One open, one read: the bytes the decoder gets are the bytes the header
+    check passed, so nothing can be swapped between the probe and the decode.
+    The format is pinned by the caller and refused on a mismatch rather than
+    left for the decoder to guess -- and a path never reaches ImageMagick,
+    which would otherwise parse `coder:`, `[scene]` and `@file` out of it.
+    """
+    try:
+        cap = int(cap_text)
+    except ValueError:
+        return fail(EXIT_USAGE, "cap must be a number")
+    if cap < 1 or cap > IMAGE_CAP_MAX:
+        return fail(EXIT_USAGE, "cap out of range")
+    if expected not in ("png", "jpeg", "webp"):
+        return fail(EXIT_USAGE, "format must be png, jpeg or webp")
+
+    try:
+        data = read_bounded(path, cap)
+    except OSError as error:
+        return fail(EXIT_UNUSABLE, "cannot read that file (%s)" % error.strerror)
+    except ValueError as error:
+        return fail(EXIT_UNUSABLE, "cannot read that file (%s)" % error)
+    if len(data) > cap:
+        return fail(EXIT_TOO_BIG, "that image is larger than %d bytes" % cap)
+
+    found = probe_bytes(data[:JPEG_SCAN_BYTES])
+    if isinstance(found, int):
+        return found
+    if found[0] != expected:
+        return fail(EXIT_REFUSED, "that file is a %s now, not the %s that was checked" % (found[0], expected))
+
+    write_all(sys.stdout.buffer.fileno(), data)
+    return EXIT_OK
 
 
 def command_read(path, cap_text):
@@ -230,9 +285,16 @@ def command_read(path, cap_text):
     if len(data) > cap:
         return fail(EXIT_TOO_BIG, "that file is larger than %d bytes" % cap)
 
-    sys.stdout.buffer.write(data)
-    sys.stdout.buffer.flush()
+    write_all(sys.stdout.buffer.fileno(), data)
     return EXIT_OK
+
+
+def write_all(fd, data):
+    # os.write may stop short; a partial state file that still parses is
+    # exactly the silent-truncation case the caps exist to prevent.
+    view = memoryview(data)
+    while len(view):
+        view = view[os.write(fd, view):]
 
 
 def command_write(path, cap_text, mode_text="0600"):
@@ -271,7 +333,7 @@ def command_write(path, cap_text, mode_text="0600"):
         return fail(EXIT_UNUSABLE, "cannot write there (%s)" % error.strerror)
 
     try:
-        os.write(fd, data)
+        write_all(fd, data)
     finally:
         os.close(fd)
     return EXIT_OK
@@ -280,7 +342,8 @@ def command_write(path, cap_text, mode_text="0600"):
 def main(argv):
     if len(argv) < 3:
         return fail(EXIT_USAGE,
-                    "usage: reader.py read <path> <cap> | write <path> <cap> | probe <path>")
+                    "usage: reader.py read <path> <cap> | write <path> <cap> [mode]"
+                    " | probe <path> | image <path> <cap> <format>")
     command = argv[1]
     if command == "probe" and len(argv) == 3:
         return command_probe(argv[2])
@@ -288,6 +351,8 @@ def main(argv):
         return command_read(argv[2], argv[3])
     if command == "write" and len(argv) in (4, 5):
         return command_write(argv[2], argv[3], argv[4] if len(argv) == 5 else "0600")
+    if command == "image" and len(argv) == 5:
+        return command_image(argv[2], argv[3], argv[4])
     return fail(EXIT_USAGE, "unknown command")
 
 

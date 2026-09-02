@@ -79,6 +79,25 @@ check "reading a symlink is refused"       2 python3 "$reader" read "$work/link.
 dd if=/dev/urandom of="$work/exact.bin" bs=4096 count=1 status=none
 check "a file of exactly the cap is read"  0 python3 "$reader" read "$work/exact.bin" 4096
 
+# The image stream: what ImageMagick is actually fed. The format is pinned by
+# the caller, so a file that is not what the probe said it was is refused
+# rather than handed to whichever decoder guesses at it.
+check "an image streams under its pinned format" \
+                                           0 python3 "$reader" image "$work/ok.png" 1048576 png
+check "a format mismatch is refused"       5 python3 "$reader" image "$work/ok.png" 1048576 jpeg
+check "an oversized image is refused"      4 python3 "$reader" image "$work/ok.png" 512 png
+check "an oversized declaration is refused" \
+                                           5 python3 "$reader" image "$work/huge.png" 67108864 png
+check "streaming a symlink is refused"     2 python3 "$reader" image "$work/link.png" 1048576 png
+check "streaming a FIFO is refused"        2 python3 "$reader" image "$work/fifo.png" 1048576 png
+check "an unknown format is refused"       6 python3 "$reader" image "$work/ok.png" 1048576 gif
+# The bytes have to be the file, whole and unchanged.
+if cmp -s "$work/ok.jpg" <(python3 "$reader" image "$work/ok.jpg" 1048576 jpeg); then
+  printf '  ok    %s\n' "the streamed bytes are the file"
+else
+  printf '  FAIL  %s\n' "the streamed bytes are not the file"; status=1
+fi
+
 if [ "$status" -eq 0 ]; then
   echo "  the probe refuses everything it has to"
 fi

@@ -180,7 +180,8 @@ output at the producer:
   reaching the cap as a failure rather than as data, so a truncated-but-plausible
   prefix cannot be accepted.
 - File reads go through `helper/reader.py read <path> <cap>`, which reads `cap+1`
-  bytes once and exits 4 if the file is bigger.
+  bytes once and exits 4 if the file is bigger. Image bytes go through
+  `reader.py image`, same open, same `cap+1`, 64 MiB ceiling.
 - The desktop file chooser is run **by the helper** (`theme-forge pick`) rather
   than directly from QML, precisely so its reply passes the same ceiling. A
   portal is another program answering over D-Bus; nothing about it makes its
@@ -257,25 +258,33 @@ if (path !== "" && root.scratchDir !== "" && path.indexOf(root.scratchDir + "/")
 So it is only ever a JPEG this plugin's own helper wrote into the private
 directory it verified. **The path the user picked is never given to `Image`.**
 
-On the decode bound specifically, three things are true and only the last two are
-load-bearing:
+On the decode bound specifically, four things are true:
 
 1. `helper/reader.py probe` reads the file's header once
    (`O_RDONLY|O_NOFOLLOW|O_NONBLOCK` + `fstat` for `S_ISREG`) and refuses
    anything declaring more than 12000 px per side or 40 MP. Each axis is bounded
    *before* multiplying, because a header may declare 2³²−1 per side.
-2. That probe is **advisory**, and the notes say so rather than claiming
-   otherwise: ImageMagick opens the file a second time, so what was checked is
-   not provably what is decoded. The bound that holds is ImageMagick's own
+2. **ImageMagick is never given the path.** `reader.py image <path> <cap>
+   <format>` opens the file once with the same flags, reads at most `cap+1`
+   bytes (64 MiB), re-runs the header check on *those bytes*, refuses them if
+   their format is not the one the probe reported, and streams them to stdout.
+   The helper pipes that into `magick <format>:-`. So the bytes the decoder
+   sees are the bytes the probe passed — there is no second open for a file to
+   be swapped under — and a path never reaches a program that would parse
+   `coder:`, `[scene]`, `@file` or `|cmd` out of it. A user's file can still be
+   called `holiday (2019) [edit].png`.
+3. The decode itself runs under ImageMagick's own
    `-limit memory 256MiB -limit map 256MiB -limit area 64MP -limit time 25
    -limit thread 2`, in a separate process that can be killed without taking
    omarchy-shell with it.
-3. `Image.sourceSize` is set, and is understood to bound what is **retained**,
+4. `Image.sourceSize` is set, and is understood to bound what is **retained**,
    not what is **allocated** — Qt scales during load only for JPEG. It is not
    counted as a decode bound anywhere in this plugin.
 
 `tools/check-probe.sh` asserts the refusals, including that a FIFO returns
-immediately instead of blocking and that a symlink is refused by `O_NOFOLLOW`.
+immediately instead of blocking, that a symlink is refused by `O_NOFOLLOW`, and
+that `image` refuses a format mismatch and an oversized file while streaming a
+good file byte-for-byte.
 
 ### Compositor / desktop state read as input
 
@@ -337,9 +346,11 @@ them through. So the file is injection-proof by construction rather than by
 escaping.
 
 `helper/theme-forge`'s `toml_line_ok()` then refuses the **whole file** if any
-line is not blank, a comment, `mode = "dark"|"light"`, `key = "#rrggbb"`, or one
-of the two exact gradient forms. Fail closed, not line-by-line: a partly-valid
-theme that still parses is worse than none, because Omarchy will apply it.
+line is not blank, a printable-ASCII comment, `mode = "dark"|"light"`, one of the
+26 known keys `= "#rrggbb"`, or one of the two exact gradient forms. Fail closed,
+not line-by-line: a partly-valid theme that still parses is worse than none,
+because Omarchy will apply it. The helper runs under `LC_ALL=C` so every one of
+those bracket expressions is the ASCII set it reads as, not a collation range.
 
 Both suites feed it values shaped to break out — a forged `mode = "light"` line,
 `; rm -rf /`, `<img src=...>`, an embedded NUL — and assert that no line of the

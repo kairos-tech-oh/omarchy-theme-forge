@@ -25,6 +25,10 @@
 
 set -uo pipefail
 
+# Byte-exact character classes. Under a UTF-8 locale a bracket range follows
+# collation order, so `[a-z]` and `[ -~]` are not the ASCII sets they read as.
+export LC_ALL=C
+
 PLUGIN_ID="kairos.theme-forge"
 PLUGIN_DIR="$HOME/.config/omarchy/plugins/$PLUGIN_ID"
 HELPER="$PLUGIN_DIR/helper/theme-forge"
@@ -102,7 +106,11 @@ cmd_edit() {
 cmd_list() {
   require_installed
   local current name
-  current=$(cat "$HOME/.local/state/omarchy/current/theme.name" 2>/dev/null)
+  # Through the helper's bounded, symlink-refusing read rather than `cat`, and
+  # through the same whitelist as every other name, so a stray file cannot
+  # forge a match or hold this open.
+  current=$("$HELPER" current 2>/dev/null)
+  valid_name "$current" || current=""
 
   # Three groups, because "can Theme Forge save over this?" has three different
   # answers and they are the reason a listing is worth having at all. The rules
@@ -168,7 +176,7 @@ cmd_list() {
 # anyone's Hyprland config.
 keybind_status() {
   python3 - "$PLUGIN_ID" <<'PY' 2>/dev/null || printf 'warn\tcould not read the keybindings from hyprctl\n'
-import json, os, re, subprocess, sys
+import json, os, re, stat, subprocess, sys
 
 plugin_id = sys.argv[1]
 
@@ -239,18 +247,39 @@ def modmask_and_key(spec):
     return mask, key
 
 
+def read_config(path):
+    """A config file's first CONFIG_CAP bytes, refusing symlinks and FIFOs.
+
+    Plain open() follows a symlink to wherever it points and blocks on a FIFO
+    until a peer appears, which would hang `doctor` on a stray file. The
+    three flags and the fstat on the open descriptor are what rule both out.
+    """
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            return ""
+        chunks, remaining = [], CONFIG_CAP
+        while remaining > 0:
+            chunk = os.read(fd, min(remaining, 65536))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        return b"".join(chunks).decode("utf-8", errors="replace")
+    finally:
+        os.close(fd)
+
+
 config = os.path.expanduser("~/.config/hypr")
 claimed = []
 for root, _dirs, files in os.walk(config):
     for name in files:
-        path = os.path.join(root, name)
         try:
             # Bounded: a config file is a few KiB, and one enormous line would
             # otherwise be read whole before anything looked at it.
-            with open(path, encoding="utf-8", errors="replace") as handle:
-                for line in handle.read(CONFIG_CAP).splitlines():
-                    if plugin_id in line:
-                        claimed.extend(binds_for(line))
+            for line in read_config(os.path.join(root, name)).splitlines():
+                if plugin_id in line:
+                    claimed.extend(binds_for(line))
         except OSError:
             continue
 
@@ -259,7 +288,8 @@ if not claimed:
     raise SystemExit(0)
 
 try:
-    live = json.loads(bounded_output(["hyprctl", "binds", "-j"], BINDS_CAP))
+    # Under a deadline: a compositor that stops answering must not hang doctor.
+    live = json.loads(bounded_output(["timeout", "10", "hyprctl", "binds", "-j"], BINDS_CAP))
     if not isinstance(live, list):
         raise ValueError("not a list of binds")
 except Exception:

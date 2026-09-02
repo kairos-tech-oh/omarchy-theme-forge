@@ -1,6 +1,7 @@
 import QtQuick
 import qs.Commons
 import qs.Ui
+import "Sanitise.js" as Sanitise
 
 // A button wearing Rice Bar's glow chrome.
 //
@@ -75,8 +76,11 @@ Item {
     radius: Math.max(0, Math.min(root.cornerRadius,
                                  Math.round(Math.min(width, height) / 2)))
 
-    text: root.text
-    tooltipText: root.tooltipText
+    // Button's label and tooltip are rendered by Text elements inside the
+    // shell, with Qt's default AutoText, so they are sanitised here at the
+    // boundary rather than trusted from whichever caller set them.
+    text: Sanitise.plain(root.text)
+    tooltipText: Sanitise.plain(root.tooltipText)
     selected: root.selected
     foreground: root.foreground
     accent: root.accent

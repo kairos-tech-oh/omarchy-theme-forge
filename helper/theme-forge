@@ -40,6 +40,10 @@
 
 set -uo pipefail
 
+# Byte-exact character classes. Under a UTF-8 locale a bracket range follows
+# collation order, so `[a-z]` and `[ -~]` are not the ASCII sets they read as.
+export LC_ALL=C
+
 EXIT_OK=0
 EXIT_REFUSED=1
 EXIT_NO_SCRATCH=7
@@ -78,11 +82,14 @@ PATH_CAP=4096
 # and is still a hard bound on what an encode can be made to write.
 IMAGE_CAP=12000000
 
+# The most an image the user picked may be, on disk. A 4K PNG measured 18 MiB.
+IMAGE_READ_CAP=67108864
+
 # What ImageMagick may spend on any single invocation, regardless of the input.
-# The declared-dimension probe runs first and refuses the obvious cases, but the
-# probe reads the file and ImageMagick opens it a second time -- so this, not the
-# probe, is the bound that actually holds. It is also in a separate process,
-# which can be killed without taking omarchy-shell with it.
+# The header probe refuses the obvious cases before a decoder runs, and the
+# decoder is then fed the same bytes the probe passed; this is the bound on
+# what decoding them may cost. It is also in a separate process, which can be
+# killed without taking omarchy-shell with it.
 IM_LIMITS=(-limit memory 256MiB -limit map 256MiB -limit area 64MP -limit time 25 -limit thread 2)
 
 WALLPAPER_WIDTH=3840
@@ -108,7 +115,7 @@ BUDGET=30
 if [[ ${1:-} == "--budget" ]]; then
   case "${2:-}" in
     ''|*[!0-9]*) BUDGET=30 ;;
-    *) BUDGET=$2 ;;
+    *) BUDGET=$(( 10#$2 )) ;;
   esac
   (( BUDGET < 1 )) && BUDGET=1
   (( BUDGET > 180 )) && BUDGET=180
@@ -330,6 +337,23 @@ valid_hex() {
   [[ ${1:-} =~ ^#[0-9a-f]{6}$ ]]
 }
 
+# The declared format of an image the user picked, after the header probe has
+# passed it. Exits with the probe's own code otherwise.
+probe_format() {
+  local info
+  need_tool python3
+  info=$(timeout "$(remaining)" python3 "$READER" probe "$1") || exit $?
+  printf '%s' "${info%% *}"
+}
+
+# The image's bytes on stdout, from one guarded open, re-probed as the bytes
+# they are. ImageMagick reads them from stdin under a pinned coder, so the path
+# the user picked never reaches a program that would parse `coder:`, `[scene]`
+# or `@file` out of it, and what it decodes is exactly what the probe passed.
+image_stream() {
+  timeout "$(remaining)" python3 "$READER" image "$1" "$IMAGE_READ_CAP" "$2" 2>/dev/null
+}
+
 # ----------------------------------------------------------------- commands
 
 cmd_scratch() {
@@ -369,7 +393,7 @@ cmd_probe() {
 }
 
 cmd_quantize() {
-  local path="${1:-}" count="${2:-6}" bin
+  local path="${1:-}" count="${2:-6}" bin fmt
   [[ -n $path ]] || refuse "quantize needs a path"
   case "$count" in ''|*[!0-9]*) count=6 ;; esac
   (( count < 2 )) && count=2
@@ -377,20 +401,24 @@ cmd_quantize() {
 
   # The probe is the gate: nothing reaches a decoder until the file's own header
   # has been read and its declared size refused.
-  need_tool python3
-  timeout "$(remaining)" python3 "$READER" probe "$path" >/dev/null || exit $?
-
+  fmt=$(probe_format "$path") || exit $?
   bin=$(magick_bin) || refuse "ImageMagick is not installed" "$EXIT_NO_TOOL"
 
   # -alpha remove -alpha off before the histogram, so every colour comes back as
-  # six hex digits rather than eight.
-  run_bounded "$QUANTIZE_CAP" "$bin" "${IM_LIMITS[@]}" "$path" \
-    -auto-orient -resize 320x320 -alpha remove -alpha off \
-    -depth 8 -colors "$count" -format %c histogram:info:-
-  local status=$?
-  (( status == EXIT_TOO_BIG )) && refuse "that image produced more colour data than expected" "$EXIT_TOO_BIG"
-  (( status == EXIT_TIMEOUT )) && refuse "reading the colours out of that image took too long" "$EXIT_TIMEOUT"
-  (( status != 0 )) && refuse "ImageMagick could not read that image"
+  # six hex digits rather than eight. Capped by head -c inside the pipeline, so
+  # the producer is stopped at the ceiling rather than checked afterwards.
+  BOUNDED_OUT=$(image_stream "$path" "$fmt" \
+    | timeout "$(remaining)" "$bin" "${IM_LIMITS[@]}" "$fmt:-" \
+        -auto-orient -resize 320x320 -alpha remove -alpha off \
+        -depth 8 -colors "$count" -format %c histogram:info:- 2>/dev/null \
+    | head -c $(( QUANTIZE_CAP + 1 )))
+  local statuses=("${PIPESTATUS[@]}")
+  (( $(printf '%s' "$BOUNDED_OUT" | wc -c) > QUANTIZE_CAP )) \
+    && refuse "that image produced more colour data than expected" "$EXIT_TOO_BIG"
+  (( statuses[0] == 124 || statuses[1] == 124 )) \
+    && refuse "reading the colours out of that image took too long" "$EXIT_TIMEOUT"
+  (( statuses[0] != 0 )) && refuse "that image could not be read"
+  (( statuses[1] != 0 )) && refuse "ImageMagick could not read that image"
 
   # Sort by pixel count so the dominant colours come first. The input is at most
   # `count` rows and was byte-capped before it got here, so the sort -- which
@@ -404,20 +432,20 @@ cmd_quantize() {
 }
 
 cmd_thumb() {
-  local path="${1:-}" dir bin out tmp
+  local path="${1:-}" dir bin out tmp fmt
   [[ -n $path ]] || refuse "thumb needs a path"
-  need_tool python3
-  timeout "$(remaining)" python3 "$READER" probe "$path" >/dev/null || exit $?
+  fmt=$(probe_format "$path") || exit $?
 
   dir=$(require_scratch) || exit $?
   bin=$(magick_bin) || refuse "ImageMagick is not installed" "$EXIT_NO_TOOL"
   out="$dir/preview.jpg"
   tmp="$dir/preview.jpg.new"
 
-  timeout "$(remaining)" "$bin" "${IM_LIMITS[@]}" "$path" \
-      -auto-orient -thumbnail 1280x720 -strip -quality 88 JPEG:- 2>/dev/null \
+  image_stream "$path" "$fmt" \
+    | timeout "$(remaining)" "$bin" "${IM_LIMITS[@]}" "$fmt:-" \
+        -auto-orient -thumbnail 1280x720 -strip -quality 88 JPEG:- 2>/dev/null \
     | write_new "$tmp" "$IMAGE_CAP"
-  if (( PIPESTATUS[0] != 0 )) || [[ ! -f $tmp ]]; then
+  if (( PIPESTATUS[0] != 0 || PIPESTATUS[1] != 0 )) || [[ ! -f $tmp ]]; then
     rm -f -- "$tmp"
     refuse "could not make a preview of that image"
   fi
@@ -511,16 +539,15 @@ cmd_wallpaper() {
 }
 
 cmd_adopt() {
-  local name path dir bin out tmp
+  local name path dir bin out tmp fmt
   name=$(require_writable_theme "${1:-}") || exit $?
   path="${2:-}"
   [[ -n $path ]] || refuse "adopt needs a path"
 
-  # Re-probed here rather than trusted from the earlier probe: this is a second
-  # open of a path the plugin does not own, and what was checked a moment ago is
-  # not necessarily what is there now.
-  need_tool python3
-  timeout "$(remaining)" python3 "$READER" probe "$path" >/dev/null || exit $?
+  # Re-probed here rather than trusted from the earlier probe: the path is one
+  # the plugin does not own, and what was checked a moment ago is not
+  # necessarily what is there now.
+  fmt=$(probe_format "$path") || exit $?
 
   bin=$(magick_bin) || refuse "ImageMagick is not installed" "$EXIT_NO_TOOL"
   dir="$(theme_root)/$name/backgrounds"
@@ -532,12 +559,13 @@ cmd_adopt() {
   # Re-encoded rather than copied. A copy would carry the original's metadata
   # into a directory the user may publish, and would leave the theme holding a
   # file this plugin never decoded successfully.
-  timeout "$(remaining)" "$bin" "${IM_LIMITS[@]}" "$path" \
-      -auto-orient -resize "${WALLPAPER_WIDTH}x${WALLPAPER_HEIGHT}^" \
-      -gravity Center -extent "${WALLPAPER_WIDTH}x${WALLPAPER_HEIGHT}" \
-      -strip -quality 92 JPEG:- 2>/dev/null \
+  image_stream "$path" "$fmt" \
+    | timeout "$(remaining)" "$bin" "${IM_LIMITS[@]}" "$fmt:-" \
+        -auto-orient -resize "${WALLPAPER_WIDTH}x${WALLPAPER_HEIGHT}^" \
+        -gravity Center -extent "${WALLPAPER_WIDTH}x${WALLPAPER_HEIGHT}" \
+        -strip -quality 92 JPEG:- 2>/dev/null \
     | write_new "$tmp" "$IMAGE_CAP" 0644
-  if (( PIPESTATUS[0] != 0 )) || [[ ! -f $tmp ]]; then
+  if (( PIPESTATUS[0] != 0 || PIPESTATUS[1] != 0 )) || [[ ! -f $tmp ]]; then
     rm -f -- "$tmp"
     refuse "could not use that image as a background"
   fi
@@ -548,12 +576,19 @@ cmd_adopt() {
 # Every line colors.toml is allowed to contain. Anything else and the whole file
 # is refused: a partly-valid theme that still parses is worse than no theme,
 # because it is silently wrong and Omarchy will happily apply it.
+TOML_KEYS='accent|selection|muted|background|dark_background|darker_background|lighter_background'
+TOML_KEYS+='|foreground|dark_foreground|light_foreground|bright_foreground'
+TOML_KEYS+='|red|yellow|orange|green|cyan|blue|magenta|brown'
+TOML_KEYS+='|bright_red|bright_yellow|bright_green|bright_cyan|bright_blue|bright_magenta'
+
 toml_line_ok() {
   local line="$1"
   [[ -z $line ]] && return 0
-  [[ $line == \#* ]] && return 0
+  # Theme Forge writes ASCII comments only, so anything else in one is not ours.
+  local comment='^#[ -~]{0,400}$'
+  [[ $line =~ $comment ]] && return 0
   [[ $line =~ ^mode\ =\ \"(dark|light)\"$ ]] && return 0
-  [[ $line =~ ^[a-z_]{1,32}\ =\ \"#[0-9a-f]{6}\"$ ]] && return 0
+  [[ $line =~ ^($TOML_KEYS)\ =\ \"#[0-9a-f]{6}\"$ ]] && return 0
   [[ $line =~ ^hyprland_active_border\ =\ \"rgba\([0-9a-f]{8}\)\ rgba\([0-9a-f]{8}\)\ 45deg\"$ ]] && return 0
   [[ $line =~ ^hyprland_inactive_border\ =\ \"rgba\([0-9a-f]{8}\)\"$ ]] && return 0
   return 1
@@ -623,6 +658,8 @@ cmd_list_wip() {
 cmd_discard_wip() {
   local name dir
   name=$(require_name "${1:-}") || exit $?
+  state_dir >/dev/null || refuse "$STATE_DIR is not a directory this can write to"
+  [[ -d $WIP_DIR && ! -L $WIP_DIR && -O $WIP_DIR ]] || exit 0
   dir="$WIP_DIR/$name"
   [[ -d $dir && ! -L $dir ]] || exit 0
   [[ -O $dir ]] || refuse "$dir is not yours"
@@ -632,12 +669,15 @@ cmd_discard_wip() {
 
 cmd_locked() {
   local name
+  [[ -d $THEMES_DIR ]] || exit 0
+  run_bounded "$LIST_CAP" find "$THEMES_DIR" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' \
+    || refuse "could not list your themes"
   while IFS= read -r name; do
-    [[ -n $name ]] || continue
+    valid_name "$name" || continue
     if [[ -L "$THEMES_DIR/$name" || -e "$THEMES_DIR/$name/.git" ]]; then
       say "$name"
     fi
-  done < <(find "$THEMES_DIR" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' 2>/dev/null | head -c "$LIST_CAP")
+  done <<<"$BOUNDED_OUT"
 }
 
 cmd_stock() {

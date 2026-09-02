@@ -196,6 +196,29 @@ function mix(a, b, amount) {
   )
 }
 
+// The ground Rice Bar paints its chrome on: the bar's own background, unless
+// text or accent would vanish against it, in which case black or white.
+function contrastSurface(background, foreground, accent) {
+  var bg = normHex(background) || "#000000"
+  if (contrast(bg, foreground) >= 3 && contrast(bg, accent) >= 2) return bg
+  return contrast("#000000", foreground) >= contrast("#ffffff", foreground) ? "#000000" : "#ffffff"
+}
+
+// Lowest alpha at or above `requested` where `text` on `fill` still reads at
+// 4.5:1 over either a black or a white wallpaper. 1 when no alpha manages it.
+function readableAlpha(fill, text, requested) {
+  var fillHex = normHex(fill) || "#000000"
+  var textHex = normHex(text) || "#ffffff"
+  var floor = clamp(requested, 0, 1)
+  for (var step = 0; step <= 50; step++) {
+    var alpha = floor + (1 - floor) * step / 50
+    var overBlack = contrast(textHex, mix("#000000", fillHex, alpha))
+    var overWhite = contrast(textHex, mix("#ffffff", fillHex, alpha))
+    if (Math.min(overBlack, overWhite) >= 4.5) return Math.round(alpha * 1000) / 1000
+  }
+  return 1
+}
+
 // Shortest-arc interpolation between two hues, so pulling 356 toward 22 goes
 // forward through 0 rather than backward through 180.
 function pullHue(from, toward, amount) {
@@ -317,8 +340,10 @@ function derive(specInput) {
 
   // Foreground ramp. Hue and saturation come from the user's foreground; only
   // lightness is solved, so the tint they picked survives the contrast pass.
+  // A pinned foreground or accent is taken here, not only in the final pass,
+  // so what derives from them derives from the colour actually chosen.
   var fgHsl = hexToHsl(spec.foreground)
-  p.foreground = solvedHex(fgHsl.h, fgHsl.s, TARGET.foreground, bg)
+  p.foreground = spec.overrides.foreground || solvedHex(fgHsl.h, fgHsl.s, TARGET.foreground, bg)
   p.light_foreground = solvedHex(fgHsl.h, fgHsl.s * 0.92, TARGET.light_foreground, bg)
   p.bright_foreground = solvedHex(fgHsl.h, fgHsl.s * 0.85, TARGET.bright_foreground, bg)
   p.dark_foreground = mix(p.foreground, bg, 0.52)
@@ -327,9 +352,9 @@ function derive(specInput) {
   // into the background stops being an accent. Lift it only if it has actually
   // collapsed -- never clamp a strong one down.
   var accentHsl = hexToHsl(spec.accent)
-  p.accent = contrast(spec.accent, bg) < 2.6
+  p.accent = spec.overrides.accent || (contrast(spec.accent, bg) < 2.6
     ? solvedHex(accentHsl.h, accentHsl.s, 3.4, bg)
-    : spec.accent
+    : spec.accent)
 
   p.selection = mix(bg, p.accent, 0.30)
   p.muted = mix(bg, p.foreground, 0.40)
@@ -338,23 +363,43 @@ function derive(specInput) {
   // ANSI band (tokyo-night's is 2.9:1). Derived, not solved.
   p.brown = hslToHex(24, 0.34, clamp(bgHsl.l + (dark ? 0.16 : -0.16), 0.05, 0.95))
 
-  // The ANSI ramp. Each anchor is pulled 14% toward the accent hue so the ramp
+  // The ANSI ramp. Each anchor is pulled toward the accent hue so the ramp
   // belongs to this palette, then solved for its target contrast at the theme's
   // chroma level.
+  //
+  // How far it is pulled, a few degrees of hue on each anchor, each anchor's
+  // own saturation, and where in its band each pair lands are all rolled from
+  // the seed, so two seeds give two visibly different ramps rather than one
+  // ramp under two accents. Hue is the one that is held tight: orange and
+  // yellow are 22 degrees apart, so an anchor never moves more than 18 -- red
+  // stays red. Still deterministic (the seed is part of the spec), and a bright
+  // shares its base's numbers, so bright > normal holds by construction.
   var sat = clamp(0.30 + 0.55 * (spec.chroma / 100), 0.05, 0.95)
   var accentHue = accentHsl.h
+  var vary = mulberry32(spec.seed * 31 + 11)
+  var pull = 0.06 + vary() * 0.12
+  var anchor = {}, satScale = {}, lift = {}
   var i, key, hue
 
   for (key in HUE) {
     if (!HUE.hasOwnProperty(key)) continue
-    hue = pullHue(HUE[key], accentHue, 0.14)
-    p[key] = solvedHex(hue, sat, TARGET[key], bg)
+    var toward = pullHue(HUE[key], accentHue, pull) - HUE[key]
+    toward = ((toward + 540) % 360) - 180
+    var shift = clamp(toward, -12, 12) + (vary() - 0.5) * 12
+    anchor[key] = ((HUE[key] + shift) % 360 + 360) % 360
+    satScale[key] = 0.82 + vary() * 0.30
+    lift[key] = (vary() - 0.5) * 1.4
+  }
+
+  for (key in HUE) {
+    if (!HUE.hasOwnProperty(key)) continue
+    p[key] = solvedHex(anchor[key], clamp(sat * satScale[key], 0.05, 0.95), TARGET[key] + lift[key], bg)
   }
 
   for (key in BRIGHT_OF) {
     if (!BRIGHT_OF.hasOwnProperty(key)) continue
-    hue = pullHue(HUE[BRIGHT_OF[key]], accentHue, 0.14)
-    p[key] = solvedHex(hue, sat * 0.94, TARGET[key], bg)
+    var base = BRIGHT_OF[key]
+    p[key] = solvedHex(anchor[base], clamp(sat * 0.94 * satScale[base], 0.05, 0.95), TARGET[key] + lift[base], bg)
   }
 
   // Hyprland's lit window edge, and the shell's popup/menu/notification borders
@@ -490,6 +535,30 @@ function rollSpec(seed, mode) {
 
 function randomSeed() {
   return Math.floor(Math.random() * 1000000)
+}
+
+// True random: every one of the twenty-six drawn uniformly from the whole
+// cube, with no solver, no bands and no relation between them. What the
+// "True random roll" setting asks for, and nothing else should use it. Still
+// a spec -- every key lands in `overrides` -- so a seed reproduces it and the
+// contrast strip reports what it did.
+function chaosSpec(seed, mode) {
+  var s = Math.floor(clamp(seed, 0, 999999))
+  var rnd = mulberry32(s + 99991)
+  function anyHex() {
+    return rgbToHex(Math.floor(rnd() * 256), Math.floor(rnd() * 256), Math.floor(rnd() * 256))
+  }
+  var overrides = {}
+  for (var i = 0; i < COLOR_KEYS.length; i++) overrides[COLOR_KEYS[i]] = anyHex()
+  return normSpec({
+    mode: mode === "light" ? "light" : "dark",
+    background: overrides.background,
+    foreground: overrides.foreground,
+    accent: overrides.accent,
+    chroma: Math.round(rnd() * 100),
+    seed: s,
+    overrides: overrides
+  })
 }
 
 // -------------------------------------------------- palette from an image

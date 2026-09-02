@@ -28,7 +28,24 @@ Item {
   signal picked(string hex)
   signal closed()
 
-  readonly property var hsl: Palette.hexToHsl(wheel.hex)
+  // The working HSL, kept here rather than re-read from the hex on every
+  // change: a hex has no hue at black, white or grey, so dragging to an edge
+  // of the square and back would otherwise snap the ring to red. It is
+  // re-read only when the hex stops matching what this last emitted.
+  property real hue: 0
+  property real sat: 0
+  property real light: 0
+  readonly property var hsl: ({ h: wheel.hue, s: wheel.sat, l: wheel.light })
+
+  function syncFromHex() {
+    if (Palette.hslToHex(wheel.hue, wheel.sat, wheel.light) === wheel.hex) return
+    var h = Palette.hexToHsl(wheel.hex)
+    wheel.hue = h.h
+    wheel.sat = h.s
+    wheel.light = h.l
+  }
+  onHexChanged: syncFromHex()
+  Component.onCompleted: syncFromHex()
 
   readonly property int wheelSize: Style.space(250)
   readonly property real ringOuter: wheelSize / 2
@@ -37,6 +54,9 @@ Item {
   readonly property real squareSide: Math.floor((ringInner - Style.space(6)) * Math.SQRT2 / 2) * 2
 
   function emit(h, s, l) {
+    wheel.hue = h
+    wheel.sat = s
+    wheel.light = l
     wheel.picked(Palette.hslToHex(h, s, l))
   }
 
@@ -298,10 +318,8 @@ Item {
         width: ringArea.width
         wrapMode: Text.WordWrap
         text: wheel.forge.selectedKey === "background"
-            || wheel.forge.selectedKey === "foreground"
-            || wheel.forge.selectedKey === "accent"
           ? "The rest of the palette re-solves against this as you drag."
-          : "Picking here pins " + wheel.forge.selectedKey + ", so it survives the next roll."
+          : "Lands exactly here and pins " + wheel.forge.selectedKey + ", so it survives the next roll."
         textFormat: Text.PlainText
         color: wheel.forge.faint
         font.family: wheel.forge.uiFont

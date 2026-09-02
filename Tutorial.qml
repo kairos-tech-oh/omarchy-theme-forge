@@ -54,18 +54,19 @@ Item {
       title: "Three colours drive the other twenty-three",
       body: "Background, foreground and accent. Click any swatch to bring it under the "
           + "sliders, or type a hex.\n\n"
-          + "Edit anything else and it becomes pinned — it survives every later roll "
-          + "until you unpin it. That is what lets you keep rolling after you have fixed "
-          + "one colour by hand.",
+          + "Anything you pick lands exactly where you put it and is pinned — it survives "
+          + "every later roll until you unpin it. That is what lets you keep rolling after "
+          + "you have fixed one colour by hand.",
       target: "editor"
     },
     {
       title: "The preview is the real thing",
       body: "A small desktop drawn from the palette in memory, using the same mapping "
-          + "Omarchy uses when it generates your configs. The bar, the window borders, a "
-          + "terminal with all sixteen colours in it.\n\n"
-          + "Judging a palette by swatches is guesswork. Judging it as a screen full of "
-          + "text is the actual question.",
+          + "Omarchy uses when it generates your configs. The bar is drawn the way yours "
+          + "is set up, the window borders are the real gradient, and the terminal has "
+          + "all sixteen colours in it.\n\n"
+          + "Click anything in it \u2014 a comment, the bar, a window edge \u2014 and the "
+          + "colour wheel opens on whichever of the twenty-six it wears.",
       target: "preview"
     },
     {

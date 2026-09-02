@@ -31,11 +31,30 @@ Item {
   readonly property var spec: forge.spec
   readonly property string selectedKey: forge.selectedKey
   readonly property string selectedHex: Palette.normHex(colors[selectedKey]) || "#000000"
-  readonly property var selectedHsl: Palette.hexToHsl(selectedHex)
+  // The working HSL for the sliders, kept rather than re-read from the hex:
+  // a grey or a black has no hue, so sliding LIGHT to the bottom and back
+  // would otherwise lose the hue. Re-read only when the hex changes elsewhere.
+  property real workHue: 0
+  property real workSat: 0
+  property real workLight: 0
+  readonly property var selectedHsl: ({ h: workHue, s: workSat, l: workLight })
+
+  function syncHsl() {
+    if (Palette.hslToHex(editor.workHue, editor.workSat, editor.workLight) === editor.selectedHex) return
+    var h = Palette.hexToHsl(editor.selectedHex)
+    editor.workHue = h.h
+    editor.workSat = h.s
+    editor.workLight = h.l
+  }
+  onSelectedHexChanged: syncHsl()
+  Component.onCompleted: syncHsl()
 
   property bool stockOpen: false
 
   function applyHsl(hue, sat, light) {
+    editor.workHue = hue
+    editor.workSat = sat
+    editor.workLight = light
     forge.setColor(editor.selectedKey, Palette.hslToHex(hue, sat, light))
   }
 
@@ -392,7 +411,7 @@ Item {
         Text {
           anchors.verticalCenter: parent.verticalCenter
           visible: forge.isPinned(editor.selectedKey)
-          text: "PINNED"
+          text: "LOCKED"
           textFormat: Text.PlainText
           color: forge.colors.yellow
           font.family: forge.uiFont
@@ -402,14 +421,16 @@ Item {
 
         RiceButton {
           anchors.verticalCenter: parent.verticalCenter
-          visible: forge.isPinned(editor.selectedKey)
-          text: "unpin"
+          text: forge.isPinned(editor.selectedKey) ? "unlock" : "lock"
           fontSize: Style.font.caption
           verticalPadding: Style.space(1)
           horizontalPadding: Style.space(5)
-          foreground: forge.dim
-          tooltipText: "Let this colour be derived again"
-          onClicked: forge.clearPin(editor.selectedKey)
+          foreground: forge.isPinned(editor.selectedKey) ? forge.dim : forge.colors.yellow
+          accent: forge.colors.yellow
+          tooltipText: forge.isPinned(editor.selectedKey)
+            ? "Let the next roll change this colour again"
+            : "Keep this colour exactly as it is through every roll"
+          onClicked: forge.togglePin(editor.selectedKey)
           tint: forge.surface
           fillAlpha: forge.surfaceAlpha
         }
@@ -543,7 +564,7 @@ Item {
         Item { width: Style.space(8); height: 1 }
 
         Text {
-          text: "click to edit"
+          text: "click to edit \u00b7 dot to lock"
           textFormat: Text.PlainText
           color: forge.faint
           font.family: forge.uiFont
@@ -563,16 +584,27 @@ Item {
           delegate: Rectangle {
             required property var modelData
             readonly property bool active: modelData.key === editor.selectedKey
+            // Lit while the pointer is over this key in the preview, so the
+            // grid answers "which one is that?" without a click.
+            readonly property bool hovered: modelData.key === forge.hoverKey
 
             width: (flick.width - Style.spacing.md) / 2
             height: Style.space(21)
             radius: Style.cornerRadius
-            color: active ? Qt.rgba(forge.ink.r, forge.ink.g, forge.ink.b, 0.10) : "transparent"
+            color: active ? Qt.rgba(forge.ink.r, forge.ink.g, forge.ink.b, 0.10)
+                 : hovered ? Qt.rgba(forge.ink.r, forge.ink.g, forge.ink.b, 0.05) : "transparent"
+            border.width: hovered ? 1 : 0
+            border.color: forge.colors.accent
 
             MouseArea {
+              id: rowHover
               anchors.fill: parent
               hoverEnabled: true
-              onClicked: forge.selectedKey = modelData.key
+              acceptedButtons: Qt.LeftButton | Qt.RightButton
+              onClicked: function (mouse) {
+                if (mouse.button === Qt.RightButton) forge.togglePin(modelData.key)
+                else forge.selectedKey = modelData.key
+              }
             }
 
             Row {
@@ -618,14 +650,25 @@ Item {
                 font.pixelSize: Style.font.caption
               }
 
+              // The lock. A filled dot when locked; a hollow one appears under
+              // the pointer so the affordance is discoverable without a label.
               Text {
                 anchors.verticalCenter: parent.verticalCenter
                 width: Style.space(10)
-                text: forge.isPinned(modelData.key) ? "•" : ""
+                text: forge.isPinned(modelData.key) ? "\u25cf" : (rowHover.containsMouse || lockHover.containsMouse ? "\u25cb" : "")
                 textFormat: Text.PlainText
                 color: forge.colors.yellow
                 font.family: forge.monoFont
                 font.pixelSize: Style.font.caption
+
+                MouseArea {
+                  id: lockHover
+                  anchors.fill: parent
+                  anchors.margins: -Style.space(4)
+                  hoverEnabled: true
+                  cursorShape: Qt.PointingHandCursor
+                  onClicked: forge.togglePin(modelData.key)
+                }
               }
             }
           }

@@ -58,6 +58,15 @@ active-border gradient, a terminal with the sixteen ANSI colours in it, and a
 contrast readout per key. It repaints on every slider frame, costs nothing, and
 changes nothing on your actual desktop.
 
+**Draws the bar you actually have.** Whichever edge yours sits on, see-through
+or solid, and — if you use [Rice Bar](https://github.com/jcarcinogen/omarchy-rice-bar)
+— its preset, opacity, radius and gap, read from the shell as they change. A
+theme is judged against the bar you look at all day, not the default one.
+
+**Edit by pointing at things.** Hover anything in the preview and it names the
+colour it wears; click it and the colour wheel opens on that colour. Nobody
+needs to know that a comment is `dark_foreground`.
+
 **Seeds a theme from a picture.** Point it at a wallpaper and it takes the hue
 and the energy from the image, then solves every lightness itself — so a muddy
 photograph cannot produce an unreadable terminal.
@@ -294,6 +303,21 @@ The number beside the button is the **seed**. It is printed for every roll, so a
 palette you liked but rolled past can be typed back into that field and pressed
 `Enter` to get it back exactly. Seeds run 0–999999.
 
+The sixteen terminal colours keep their names — a roll's red is always a red —
+but they are not the same sixteen every time. How far each leans toward the
+accent, a few degrees of hue on each, and where in its band each pair lands are
+all rolled from the seed, so two rolls give two ramps rather than one ramp under
+two accents. The Roll button also steers away from the accent hue it is
+leaving, so consecutive presses are visibly different; typing a seed gives that
+seed exactly.
+
+**True random roll**, in Settings, replaces all of that with pure chance: every
+one of the twenty-six is drawn from the whole colour cube, with no contrast
+solving, no bands, and no relation between them. Text can vanish into the
+ground and the sixteen can land on top of each other. The grid and the footer
+still report what is out of band, but nothing stops it being saved or applied.
+Locked colours are left alone either way.
+
 ### The three that drive everything
 
 Twenty-six colours come out of three, plus mode and chroma:
@@ -313,15 +337,65 @@ colour wheel: a hue ring around a saturation/lightness square. It is HSL rather
 than the HSV most wheels use, so it agrees with the sliders beside it about what
 every number means.
 
-You will sometimes see the LIGHT slider settle somewhere other than where you
-let go. That is the contrast solver overruling you, and the slider showing you
-honestly where the colour actually landed.
+A colour you pick lands exactly where you put it. The solver places the colours
+you have not chosen; it never moves one you have. So a foreground can sit
+outside its band if that is where you put it — the grid and the footer will say
+so in red, and it is your call.
 
-### Pinning a colour
+### Editing from the preview
 
-Editing anything other than the three primaries **pins** it — the swatch gets a
-yellow dot and the label says `PINNED`. A pinned colour survives every later
-roll and re-derivation until you press **unpin**.
+Everything painted in the preview knows which of the twenty-six it is wearing.
+Hover a part of it — a comment in the terminal, the bar, a window's edge, one
+of the sixteen swatches beneath — and it is outlined and named, with its hex
+and whether it is pinned; the matching row in the grid lights up at the same
+time. Click it and the colour wheel opens on that colour, exactly as if you had
+found the row and pressed the big swatch.
+
+Two parts wear more than one colour and pick by where you point: the active
+window's border is `accent` on its left half and `bright_foreground` on its
+right, the way the gradient runs, and the drawn wallpaper is
+`darker_background` at the top and `background` at the bottom.
+
+### The bar in the preview
+
+The bar is drawn the way yours is set up, read from the shell's own bar config
+rather than from a file of its own:
+
+- **which edge** — top, bottom, left or right; a side bar is drawn as a column
+- **see-through or solid** — a see-through bar has no ground of its own, so the
+  text sits straight on the wallpaper
+- **your widgets** — the stock ones by glyph, anything else as a small chip, in
+  the sections you keep them in, so the bar takes up the room it really does
+- **the clock's format** — the same `format` string, rendered at a fixed time
+- **Rice Bar** — when it is installed and in your layout, its preset with your
+  opacity, radius, gap and border, using the same colour rules the plugin
+  itself uses (the bar ground, darkened for *glow* and *mono*, tinted toward
+  the accent for *material*, lifted to an opacity the bar text still reads at).
+  *Powerline*'s angled ends are drawn square at this size.
+
+If you would rather see the stock Omarchy bar — what someone without your
+settings gets — turn **Draw the bar the way mine is set up** off in Settings.
+A bar provided by a different plugin altogether is not something this can draw,
+and the stock bar stands in for it.
+
+### Locking a colour
+
+Any of the twenty-six can be **locked**, `background` included, and a roll
+leaves a locked colour exactly as it is. Three ways to do it:
+
+- the dot beside a colour in the grid (it appears when you hover the row; a
+  right-click on the row does the same)
+- the **lock** button beside the colour's name above the sliders
+- a right-click on anything in the preview
+
+A locked colour shows a filled yellow dot and the label `LOCKED`. Editing a
+colour locks it too, so a colour you have set by hand is never rolled away.
+**unlock** hands it back to the solver, which places it again on the next
+derivation. The footer says how many locks a roll kept, and if all twenty-six
+are locked it says the roll changed nothing.
+
+Switching **dark** / **light** drops every lock, because a colour chosen against
+one ground is meaningless against the other.
 
 That is what lets you keep rolling after you have fixed one colour by hand.
 
@@ -407,9 +481,10 @@ The **OPEN** row lists your own themes, with anything in progress marked in
 yellow. **Start from an Omarchy theme** unfolds the twenty-odd themes Omarchy
 ships — opening one is the best way to begin from something known, and to see
 the numbers behind a palette you already like. `theme-forge edit <name>` opens
-any of them from a terminal. Every colour arrives pinned, so what you see is
-exactly what is on disk rather than a re-derivation. Roll, unpin, or edit from
-there — and give it a new name if the original is one of the three above.
+any of them from a terminal. Every colour arrives exactly as it is on disk
+rather than as a re-derivation, but nothing is locked: lock what you want to
+keep, then roll the rest — and give it a new name if the original is one of the
+three above.
 
 Opening a stock theme is a good way to see the numbers behind a palette you
 already like.
@@ -433,6 +508,13 @@ The **SETTINGS** button in the header, or `theme-forge settings`.
   preview and every swatch stay fully opaque whatever you set, so the colours you
   are judging are never tinted by what is behind the window. Hyprland applies its
   own window opacity on top of this.
+- **Draw the bar the way mine is set up** — on by default. The description under
+  it says what was detected. Off shows the stock Omarchy bar instead.
+- **Widget size** — how large the bar's widgets are drawn in the preview: ½×,
+  ¾× (the default) or 1×, which is true to scale and crowded on a busy bar.
+- **True random roll** — off by default. On, every roll draws all twenty-six
+  from the whole colour cube with no contrast solving; the warning beneath the
+  toggle says what that means. Locked colours are left alone.
 - **Where things are** — the paths this plugin reads and writes.
 
 Preferences live in `~/.local/state/kairos.theme-forge/prefs.json`, separately
@@ -654,7 +736,7 @@ tools/run-checks.sh
 Runs, in order:
 
 - `omarchy plugin validate` on the manifest
-- the palette and boundary-guard suites under Node (4600+ assertions)
+- the palette, boundary-guard and bar-config suites under Node (4600+ assertions)
 - the same properties under Qt's V4 engine — the one `omarchy-shell` actually
   runs, and not Node
 - the image-probe refusals: an oversized PNG, a FIFO, a symlink, a non-image

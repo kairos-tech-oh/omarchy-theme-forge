@@ -4,7 +4,7 @@
 #   tools/run-checks.sh
 #
 # 1. The manifest matches what the shell enforces at load.
-# 2. Palette.js and Sanitise.js behave under Node.
+# 2. Palette.js, Sanitise.js and BarStyle.js behave under Node.
 # 3. Both libraries behave under Qt's V4 engine -- which is the engine
 #    omarchy-shell actually uses, and is not Node.
 # 4. helper/reader.py refuses the images and paths it has to refuse.
@@ -30,7 +30,7 @@ else
   echo "  skipped: omarchy is not on PATH"
 fi
 
-note "Palette and Sanitise under Node"
+note "Palette, Sanitise and BarStyle under Node"
 if command -v node >/dev/null 2>&1; then
   node tools/check-palette.js || status=1
 else

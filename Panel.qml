@@ -5,6 +5,7 @@ import qs.Commons
 import qs.Ui
 import "Palette.js" as Palette
 import "Sanitise.js" as Sanitise
+import "BarStyle.js" as BarStyle
 
 // Theme Forge — build an Omarchy theme, see it before you commit to it.
 //
@@ -160,33 +161,105 @@ Item {
   property string themeName: ""
   property string selectedKey: "background"
 
-  // Applied by the sliders and the hex fields. The three primaries move the
-  // spec, which re-derives everything; any other key becomes a pin that
-  // survives derivation until it is cleared.
+  // Applied by the sliders, the hex fields, the wheel and the preview. A colour
+  // chosen by hand lands exactly where it was put: the three primaries move the
+  // spec so the rest re-derives around them, and every key but the ground is
+  // also pinned, because the solver would otherwise move a foreground to its
+  // target or lift a faint accent -- which reads as the picker fighting you.
   function setColor(key, hex) {
     var value = Palette.normHex(hex)
     if (value === "") return
     var next = cloneSpec(root.spec)
-    if (key === "background" || key === "foreground" || key === "accent") {
-      next[key] = value
-      // A pin on a primary would shadow the value the spec just set, which
-      // reads as "the slider does nothing".
-      delete next.overrides[key]
-    } else {
-      next.overrides[key] = value
-    }
+    if (key === "background" || key === "foreground" || key === "accent") next[key] = value
+    if (key === "background") delete next.overrides[key]
+    else next.overrides[key] = value
+    root.setHandPin(key, true)
+    root.setSpec(next)
+  }
+
+  // ------------------------------------------------------------------ pins
+  //
+  // Two separate things, kept separate. `spec.overrides` is a value shown
+  // exactly -- an opened theme puts all twenty-six there, and so does a true
+  // random roll. `handPins` is a lock: the keys the user has chosen to keep,
+  // which is what a roll steps around. A lock on `background` has no override
+  // (it is the ground everything else is solved against, so it lives in the
+  // spec) and is carried by value instead.
+
+  property var handPins: ({})
+
+  function isPinned(key) {
+    return root.handPins[key] === true
+  }
+
+  function setHandPin(key, on) {
+    var hand = {}
+    for (var k in root.handPins) if (root.handPins[k] === true && k !== key) hand[k] = true
+    if (on) hand[key] = true
+    root.handPins = hand
+  }
+
+  function handPinnedKeys() {
+    var keys = []
+    for (var i = 0; i < Palette.COLOR_KEYS.length; i++)
+      if (root.handPins[Palette.COLOR_KEYS[i]] === true) keys.push(Palette.COLOR_KEYS[i])
+    return keys
+  }
+
+  // Lock a colour exactly as it is showing right now.
+  function pin(key) {
+    if (Palette.COLOR_KEYS.indexOf(key) === -1) return
+    var value = Palette.normHex(root.colors[key])
+    if (value === "") return
+    var next = cloneSpec(root.spec)
+    if (key === "background" || key === "foreground" || key === "accent") next[key] = value
+    if (key !== "background") next.overrides[key] = value
+    root.setHandPin(key, true)
     root.setSpec(next)
   }
 
   function clearPin(key) {
-    if (!root.spec.overrides[key]) return
+    if (!root.isPinned(key)) return
     var next = cloneSpec(root.spec)
     delete next.overrides[key]
+    root.setHandPin(key, false)
     root.setSpec(next)
   }
 
-  function isPinned(key) {
-    return root.spec.overrides[key] !== undefined
+  function togglePin(key) {
+    if (root.isPinned(key)) root.clearPin(key)
+    else root.pin(key)
+  }
+
+  // A roll replaces everything that is not locked. Locked colours ride across
+  // it by value: an override where there is one, the spec's own field for the
+  // three the rest is solved against.
+  function keepPins(rolled) {
+    var next = Palette.normSpec(rolled)
+    var kept = root.handPinnedKeys()
+    for (var i = 0; i < kept.length; i++) {
+      var key = kept[i]
+      if (key === "background" || key === "foreground" || key === "accent") next[key] = root.spec[key]
+      if (root.spec.overrides[key] !== undefined) next.overrides[key] = root.spec.overrides[key]
+      else if (key !== "background") next.overrides[key] = Palette.normHex(root.colors[key])
+    }
+    return next
+  }
+
+  // Which roller the Roll button uses.
+  function rollSpecFor(seed) {
+    return root.trueRandom
+      ? Palette.chaosSpec(seed, root.spec.mode)
+      : Palette.rollSpec(seed, root.spec.mode)
+  }
+
+  function rollStatus(seed) {
+    var kept = root.handPinnedKeys().length
+    var how = root.trueRandom ? " at true random" : ""
+    if (kept >= Palette.COLOR_KEYS.length)
+      return "Everything is locked, so seed " + seed + " changed nothing. Unlock something first."
+    if (kept === 0) return "Rolled seed " + seed + how + "."
+    return "Rolled seed " + seed + how + ", keeping " + kept + " locked colour" + (kept === 1 ? "" : "s") + "."
   }
 
   function cloneSpec(source) {
@@ -220,13 +293,28 @@ Item {
     // pins, which were chosen against the old ground.
     var rolled = Palette.rollSpec(root.spec.seed, next.mode)
     rolled.chroma = root.spec.chroma
+    root.handPins = {}
     root.setSpec(rolled)
   }
 
+  // The Roll button. A seed is still a seed -- typing one back gives exactly
+  // that palette -- but the button steers clear of the accent hue it is
+  // leaving, because two dark grounds with nearby accents look like the same
+  // palette at preview size and read as "nothing happened".
   function roll() {
     var seed = Palette.randomSeed()
-    root.setSpec(Palette.rollSpec(seed, root.spec.mode))
-    root.setStatus("Rolled seed " + seed + ".", "info")
+    // True random means exactly that: no steering either.
+    if (!root.trueRandom && !root.isPinned("accent")) {
+      var was = Palette.hexToHsl(root.colors.accent).h
+      for (var attempt = 0; attempt < 8; attempt++) {
+        var candidate = Palette.randomSeed()
+        var hue = Palette.hexToHsl(Palette.derive(Palette.rollSpec(candidate, root.spec.mode)).accent).h
+        var apart = Math.abs(((hue - was) % 360 + 540) % 360 - 180)
+        if (apart >= 50) { seed = candidate; break }
+      }
+    }
+    root.setSpec(root.keepPins(root.rollSpecFor(seed)))
+    root.setStatus(root.rollStatus(seed), "info")
   }
 
   function rollSeed(seedText) {
@@ -235,8 +323,8 @@ Item {
       root.setStatus("A seed is a whole number from 0 to 999999.", "error")
       return
     }
-    root.setSpec(Palette.rollSpec(seed, root.spec.mode))
-    root.setStatus("Rolled seed " + seed + ".", "info")
+    root.setSpec(root.keepPins(root.rollSpecFor(seed)))
+    root.setStatus(root.rollStatus(seed), "info")
   }
 
   function setChroma(value) {
@@ -263,20 +351,42 @@ Item {
   property bool tutorialOpen: false
   property string page: "design"     // design | settings
   property bool wheelOpen: false
+  // Whether the preview's bar copies the user's own -- position, transparency,
+  // Rice Bar preset -- or the stock Omarchy bar everyone else would see.
+  property bool mirrorBar: true
+  // How large the widgets in the preview's bar are drawn, as a fraction of
+  // true-to-scale. Below 1 the bar reads as a bar rather than a crowd.
+  property real barDensity: 0.75
+  // Roll every colour from the whole cube with no solver and no bands.
+  property bool trueRandom: false
 
   function setPref(key, value) {
     if (key === "showTutorialOnOpen") root.showTutorialOnOpen = value === true
     else if (key === "tutorialSeen") root.tutorialSeen = value === true
     else if (key === "surfaceAlpha") root.surfaceAlpha = Math.max(0.60, Math.min(1.0, Number(value) || 0.90))
+    else if (key === "mirrorBar") root.mirrorBar = value === true
+    else if (key === "barDensity") root.barDensity = root.densityStep(value)
+    else if (key === "trueRandom") root.trueRandom = value === true
     else return
     root.savePrefs()
+  }
+
+  // Three steps rather than a slider, so the preview cannot land on a size no
+  // one would choose. Anything unrecognised is the default.
+  function densityStep(value) {
+    var n = Number(value)
+    if (n === 0.5 || n === 1) return n
+    return 0.75
   }
 
   function savePrefs() {
     prefsSaveProc.payload = JSON.stringify({
       tutorialSeen: root.tutorialSeen,
       showTutorialOnOpen: root.showTutorialOnOpen,
-      surfaceAlpha: root.surfaceAlpha
+      surfaceAlpha: root.surfaceAlpha,
+      mirrorBar: root.mirrorBar,
+      barDensity: root.barDensity,
+      trueRandom: root.trueRandom
     })
     prefsSaveProc.stdinEnabled = true
     prefsSaveProc.running = true
@@ -294,6 +404,9 @@ Item {
       root.showTutorialOnOpen = data.showTutorialOnOpen === true
       var alpha = Number(data.surfaceAlpha)
       if (isFinite(alpha)) root.surfaceAlpha = Math.max(0.60, Math.min(1.0, alpha))
+      root.mirrorBar = data.mirrorBar !== false
+      root.barDensity = root.densityStep(data.barDensity)
+      root.trueRandom = data.trueRandom === true
     }
     root.prefsLoaded = true
     root.maybeStartTutorial()
@@ -325,6 +438,57 @@ Item {
     root.tutorialSeen = true
     if (suppress) root.showTutorialOnOpen = false
     root.savePrefs()
+  }
+
+  // ------------------------------------------------------------ the user's bar
+  //
+  // Read from the shell object the panel loader injects, never from a file:
+  // `shell.barConfig` is the `bar` subtree of shell.json as the shell itself
+  // parsed it, and it is replaced whenever the bar settings change, so the
+  // preview follows a moved bar or a switched Rice Bar preset with no I/O of
+  // its own. Without a shell (a stale loader, a future host) it is a stock bar.
+
+  readonly property bool riceInstalled: {
+    if (!root.shell || !root.shell.pluginRegistry) return false
+    var installed = root.shell.pluginRegistry.installedPlugins
+    if (!installed || !installed[BarStyle.RICE_ID]) return false
+    var config = root.shell.shellConfig
+    var disabled = config && Array.isArray(config.disabledPlugins) ? config.disabledPlugins : []
+    return disabled.indexOf(BarStyle.RICE_ID) === -1
+  }
+  readonly property var ownBar: BarStyle.resolve(root.shell ? root.shell.barConfig : null, root.riceInstalled)
+  readonly property var previewBar: root.mirrorBar ? root.ownBar : BarStyle.stock()
+
+  // ------------------------------------------------- editing from the preview
+  //
+  // Every painted part of the mock desktop carries a Hotspot naming the key it
+  // wears. Hovering one is reported here so the preview can outline it and the
+  // editor can light the matching row; clicking one is the same as clicking
+  // that row and then the big swatch.
+
+  property string hoverKey: ""
+  property var hoverItem: null
+  // Bumped on every report so the outline re-measures a hovered item whose
+  // ancestors moved, which a binding on the item alone would not notice.
+  property int hoverTick: 0
+
+  function previewHover(item, key) {
+    if (Palette.COLOR_KEYS.indexOf(key) === -1) { root.previewUnhover(item); return }
+    root.hoverItem = item
+    root.hoverKey = key
+    root.hoverTick = root.hoverTick + 1
+  }
+
+  function previewUnhover(item) {
+    if (root.hoverItem !== item) return
+    root.hoverItem = null
+    root.hoverKey = ""
+  }
+
+  function pickFromPreview(key) {
+    if (Palette.COLOR_KEYS.indexOf(key) === -1) return
+    root.selectedKey = key
+    root.wheelOpen = true
   }
 
   // ---------------------------------------------------------------- status
@@ -452,6 +616,7 @@ Item {
     draftSaveProc.payload = JSON.stringify({
       spec: root.spec,
       themeName: Sanitise.themeName(root.themeName),
+      handPins: root.handPinnedKeys(),
       sourceImage: root.sourceImage,
       saveMode: root.saveMode
     })
@@ -472,6 +637,13 @@ Item {
     var name = Sanitise.themeName(data.themeName)
     if (name !== "") root.themeName = name
     if (data.saveMode === "wip" || data.saveMode === "theme") root.saveMode = data.saveMode
+    // Re-checked against the key list: the draft is a file the user can edit.
+    var hand = {}
+    if (Array.isArray(data.handPins)) {
+      for (var i = 0; i < data.handPins.length; i++)
+        if (Palette.COLOR_KEYS.indexOf(String(data.handPins[i])) !== -1) hand[String(data.handPins[i])] = true
+    }
+    root.handPins = hand
     // The picked image is re-probed and re-thumbnailed rather than trusted from
     // the draft: the path is a string in a file, and the file it names may have
     // changed or gone since it was written.
@@ -887,6 +1059,8 @@ Item {
       if (exitCode !== 0) { root.setStatus("Could not read that theme.", "error"); return }
       var loaded = Palette.fromToml(loadProc.outText)
       if (!loaded) { root.setStatus("That theme has no colours this can read.", "error"); return }
+      // Pinned for display, not by hand: the next roll replaces all of it.
+      root.handPins = {}
       root.setSpec(loaded)
       root.themeName = loadProc.themeName
       // Opening an in-progress theme puts the save mode back where it was, so

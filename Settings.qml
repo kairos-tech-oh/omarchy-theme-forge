@@ -3,6 +3,7 @@ pragma ComponentBehavior: Bound
 import QtQuick
 import qs.Commons
 import qs.Ui
+import "BarStyle.js" as BarStyle
 
 // Theme Forge's own settings — how the tool behaves, not what a theme looks
 // like.
@@ -118,6 +119,124 @@ Item {
           color: settings.forge.faint
           font.family: settings.forge.uiFont
           font.pixelSize: Style.font.caption
+        }
+      }
+
+      // ------------------------------------------------------------- rolling
+
+      SettingsGroup {
+        width: parent.width
+        forge: settings.forge
+        title: "Rolling"
+
+        Toggle {
+          width: parent.width
+          label: "True random roll"
+          description: settings.forge.trueRandom
+            ? "Every one of the twenty-six is drawn from the whole colour cube, "
+              + "with no contrast solving and no relation between them."
+            : "Off: every roll is solved for readable contrast, and the sixteen "
+              + "terminal colours keep their names. Turn on for pure chance."
+          checked: settings.forge.trueRandom
+          foreground: settings.forge.ink
+          accent: settings.forge.colors.yellow
+          fontFamily: settings.forge.uiFont
+          onClicked: settings.forge.setPref("trueRandom", !settings.forge.trueRandom)
+        }
+
+        Text {
+          width: parent.width
+          wrapMode: Text.WordWrap
+          text: "\u26a0 With this on, nothing keeps a roll readable. Text can vanish into "
+              + "the ground, the sixteen can land on top of each other, and a red can come "
+              + "out green. The grid and the footer still report every colour that is "
+              + "outside its band, but nothing stops one from being saved or applied. "
+              + "Locked colours are left alone either way."
+          textFormat: Text.PlainText
+          color: settings.forge.colors.yellow
+          font.family: settings.forge.uiFont
+          font.pixelSize: Style.font.caption
+        }
+
+        Text {
+          width: parent.width
+          wrapMode: Text.WordWrap
+          text: "Any of the twenty-six can be locked so a roll leaves it alone: the dot "
+              + "beside it in the grid, the lock button above the sliders, or a right-click "
+              + "on anything in the preview."
+          textFormat: Text.PlainText
+          color: settings.forge.faint
+          font.family: settings.forge.uiFont
+          font.pixelSize: Style.font.caption
+        }
+      }
+
+      // ------------------------------------------------------------ the preview
+
+      SettingsGroup {
+        width: parent.width
+        forge: settings.forge
+        title: "The preview"
+
+        Toggle {
+          width: parent.width
+          label: "Draw the bar the way mine is set up"
+          description: settings.forge.mirrorBar
+            ? "Yours right now: " + BarStyle.describe(settings.forge.ownBar) + ". "
+              + "Which edge, see-through or solid, and Rice Bar's preset if you use it, "
+              + "read from the shell as it changes."
+            : "Showing the stock Omarchy bar instead \u2014 what someone without your "
+              + "bar settings would see. Yours is " + BarStyle.describe(settings.forge.ownBar) + "."
+          checked: settings.forge.mirrorBar
+          foreground: settings.forge.ink
+          accent: settings.forge.colors.accent
+          fontFamily: settings.forge.uiFont
+          onClicked: settings.forge.setPref("mirrorBar", !settings.forge.mirrorBar)
+        }
+
+        Row {
+          width: parent.width
+          spacing: Style.spacing.sm
+
+          Text {
+            anchors.verticalCenter: parent.verticalCenter
+            text: "WIDGET SIZE"
+            textFormat: Text.PlainText
+            color: settings.forge.faint
+            font.family: settings.forge.uiFont
+            font.pixelSize: Style.font.caption
+            font.letterSpacing: 1
+          }
+
+          Repeater {
+            model: [
+              { label: "\u00bd\u00d7", value: 0.5 },
+              { label: "\u00be\u00d7", value: 0.75 },
+              { label: "1\u00d7", value: 1 }
+            ]
+            delegate: RiceButton {
+              required property var modelData
+              text: modelData.label
+              fontSize: Style.font.caption
+              verticalPadding: Style.space(2)
+              horizontalPadding: Style.space(6)
+              selected: settings.forge.barDensity === modelData.value
+              foreground: selected ? settings.forge.colors.accent : settings.forge.dim
+              accent: settings.forge.colors.accent
+              tint: settings.forge.surface
+              fillAlpha: settings.forge.surfaceAlpha
+              onClicked: settings.forge.setPref("barDensity", modelData.value)
+            }
+          }
+
+          Text {
+            anchors.verticalCenter: parent.verticalCenter
+            text: "how large the bar's widgets are drawn; 1\u00d7 is true to scale"
+            textFormat: Text.PlainText
+            color: settings.forge.faint
+            font.family: settings.forge.uiFont
+            font.pixelSize: Style.font.caption
+          }
         }
       }
 

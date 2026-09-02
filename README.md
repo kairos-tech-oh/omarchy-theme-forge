@@ -8,7 +8,7 @@ theme. Theme Forge is the missing one: roll a palette, tune any of the
 twenty-six colours by hand, or seed the whole thing from a wallpaper — then save
 a real theme directory and apply it, with one click to put your old theme back.
 
-![Theme Forge tiled beside a terminal](preview.png)
+![Theme Forge with the preview bar mirroring Rice Bar and a hovered token](preview.png)
 
 ---
 

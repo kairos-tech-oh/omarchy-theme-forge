@@ -209,6 +209,25 @@ QtObject {
     }
     if (JSON.stringify(Palette.chaosSpec(4242, "dark")) !== JSON.stringify(chaos)) return fail(43)
 
+    // 44: the icon set is always one the helper will accept -- for the whole
+    // hue circle, for every rolled accent, and for anything that is not a
+    // colour at all. V4's own number formatting decides those hues.
+    if (Palette.iconTheme("#e53935") !== "Yaru-red") return fail(44)
+    if (Palette.iconTheme("#89b4fa") !== "Yaru-blue") return fail(44)
+    if (Palette.iconTheme("#f9e2af") !== "Yaru-yellow") return fail(44)
+    if (Palette.iconTheme("#808080") !== "Yaru-blue") return fail(44)
+    if (Palette.iconTheme("Yaru-evil; rm -rf /") !== "Yaru-blue") return fail(44)
+    if (Palette.iconTheme(null) !== "Yaru-blue") return fail(44)
+    for (var ih = 0; ih < 360; ih++) {
+      if (Palette.ICON_THEMES.indexOf(Palette.iconTheme(Palette.hslToHex(ih, 0.7, 0.55))) === -1) return fail(44)
+    }
+    for (var isd = 0; isd < 60; isd++) {
+      var iconDark = Palette.derive(Palette.rollSpec(isd, "dark"))
+      var iconLight = Palette.derive(Palette.rollSpec(isd, "light"))
+      if (Palette.ICON_THEMES.indexOf(Palette.iconTheme(iconDark.accent)) === -1) return fail(44)
+      if (Palette.ICON_THEMES.indexOf(Palette.iconTheme(iconLight.accent)) === -1) return fail(44)
+    }
+
     Qt.exit(0)
   }
 }

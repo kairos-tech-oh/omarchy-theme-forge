@@ -8,9 +8,11 @@
 # 3. Both libraries behave under Qt's V4 engine -- which is the engine
 #    omarchy-shell actually uses, and is not Node.
 # 4. helper/reader.py refuses the images and paths it has to refuse.
-# 5. Every QML file passes qmllint with the shell's own imports resolved.
+# 5. `verify` reports what it has to and `export` refuses what it has to.
+# 6. Every QML file passes qmllint with the shell's own imports resolved.
 #
-# None of this touches the running desktop, writes a theme, or applies one.
+# None of this touches the running desktop, writes a theme, or applies one --
+# the publishing checks run against a throwaway HOME of their own.
 set -uo pipefail
 
 cd "$(dirname "$0")/.." || exit 1
@@ -64,6 +66,13 @@ if command -v python3 >/dev/null 2>&1 && command -v magick >/dev/null 2>&1; then
   tools/check-probe.sh || status=1
 else
   echo "  skipped: needs python3 and ImageMagick"
+fi
+
+note "publishing"
+if command -v magick >/dev/null 2>&1 || command -v convert >/dev/null 2>&1; then
+  tools/check-export.sh || status=1
+else
+  echo "  skipped: needs ImageMagick"
 fi
 
 note "qmllint"

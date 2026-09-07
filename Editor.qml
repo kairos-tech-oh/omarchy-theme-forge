@@ -675,6 +675,74 @@ Item {
         }
       }
 
+      Rectangle { width: parent.width; height: 1; color: forge.hairline }
+
+      // ---------------------------------------------------------- publishing
+      //
+      // Last thing in the column because it is the last thing you do: the theme
+      // is on disk, and this packages it as the git repository omarchy.org
+      // installs from. It never touches ~/.config/omarchy/themes -- a .git
+      // there is what makes Omarchy treat a theme as a stranger's.
+      Column {
+        id: publishBlock
+        width: parent.width
+        spacing: Style.spacing.sm
+
+        Text {
+          text: "PUBLISH"
+          textFormat: Text.PlainText
+          color: forge.faint
+          font.family: forge.uiFont
+          font.pixelSize: Style.font.caption
+          font.letterSpacing: 2
+          font.bold: true
+        }
+
+        Row {
+          width: parent.width
+          spacing: Style.spacing.controlGap
+
+          RiceButton {
+            text: forge.publishPath === "" ? "Make a repository" : "Update the repository"
+            foreground: forge.publishable() ? forge.colors.accent : forge.dim
+            accent: forge.colors.accent
+            enabled: !forge.busy && forge.publishable()
+            tooltipText: forge.publishable()
+              ? "Copies this theme into a folder you pick, adds a README and a licence, and commits it"
+              : "Save it as a theme first -- publishing packages what is on disk"
+            onClicked: forge.publish()
+            tint: forge.surface
+            fillAlpha: forge.surfaceAlpha
+          }
+        }
+
+        Text {
+          width: parent.width
+          visible: forge.publishPath !== ""
+          wrapMode: Text.WrapAnywhere
+          text: Sanitise.plain(forge.publishPath) + (forge.publishNote === "" ? "" : "  --  " + forge.publishNote)
+          textFormat: Text.PlainText
+          color: forge.dim
+          font.family: forge.monoFont
+          font.pixelSize: Style.font.caption
+        }
+
+        Repeater {
+          model: forge.publishPath === "" ? [] : forge.publishSteps
+          delegate: Text {
+            required property int index
+            required property string modelData
+            width: publishBlock.width
+            wrapMode: Text.WordWrap
+            text: (index + 1) + ". " + Sanitise.plain(modelData)
+            textFormat: Text.PlainText
+            color: forge.faint
+            font.family: forge.uiFont
+            font.pixelSize: Style.font.caption
+          }
+        }
+      }
+
       Item { width: 1; height: Style.space(6) }
     }
   }

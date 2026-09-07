@@ -36,6 +36,9 @@ a real theme directory and apply it, with one click to put your old theme back.
 - [The `theme-forge` command](#the-theme-forge-command)
 - [What a theme actually is](#what-a-theme-actually-is)
 - [Publishing a theme you made](#publishing-a-theme-you-made)
+  - [Why beside, and not inside](#why-beside-and-not-inside)
+  - [The rest of it](#the-rest-of-it)
+  - [Checking a theme](#checking-a-theme)
 - [Troubleshooting](#troubleshooting)
 - [Uninstall](#uninstall)
 - [Development](#development)
@@ -531,6 +534,9 @@ theme-forge close           close it
 theme-forge edit <name>     open it with an existing theme loaded
 theme-forge settings        open it on the settings page
 theme-forge list            what is installed, and which are yours to edit
+theme-forge verify <name>   check a theme against what Omarchy and omarchy.org need
+theme-forge publish <name> [folder]
+                            build the git repository omarchy.org installs from
 theme-forge doctor          check the install and its dependencies
 theme-forge help            usage
 ```
@@ -558,11 +564,13 @@ would mean a second copy of the contrast solver to keep in step with the first.
 
 ## What a theme actually is
 
-One file:
+Almost one file:
 
 ```
 ~/.config/omarchy/themes/<name>/
-├── colors.toml              26 colors and a mode
+├── colors.toml              26 colors and a mode -- the theme
+├── icons.theme              one word: the GNOME icon set
+├── preview.png              written when you publish
 └── backgrounds/
     └── 0-<name>.jpg
 ```
@@ -572,6 +580,11 @@ Alacritty, foot, Ghostty, kitty, btop, Neovim, Helix, Hyprland, Chromium, VS
 Code, Obsidian and the shell's own palette from it. Producing a complete
 system-wide theme means producing 26 good hex values, which is what this tool is
 for.
+
+`icons.theme` is the one setting no Omarchy template derives — it holds a single
+word naming the GNOME icon set, and without it Omarchy falls back to `Yaru-blue`
+whatever your accent is. Theme Forge picks the nearest Yaru variant to your
+accent's hue and writes it with every save.
 
 It is a plain, readable file — edit it by hand whenever you like, and Theme
 Forge will read your edits back the next time you open that theme:
@@ -604,23 +617,92 @@ red = "#e08554"
 
 ## Publishing a theme you made
 
-A saved theme is already a publishable one — Omarchy installs a theme by cloning
-a git repository into `~/.config/omarchy/themes/`.
+Omarchy installs a community theme by cloning a git repository, and
+<https://omarchy.org/themes/> is a grid of them. Theme Forge builds that
+repository for you.
+
+Press **Make a repository** at the bottom of the left column, or:
 
 ```sh
-cd ~/.config/omarchy/themes/<name>
-git init && git add . && git commit -m "Initial theme"
-gh repo create omarchy-<name>-theme --public --source=. --push
+theme-forge publish <name>          # asks where to put it
+theme-forge publish <name> ~/Code   # or say where
 ```
 
-Anyone can then run `omarchy theme install <your-repo-url>`. Add a `LICENSE` and
-a `preview.png` before you do; see <https://omarchy.org/themes/> for what a
-listing wants.
+Either way you get, beside your theme rather than inside it:
 
-Note that once a theme lives in a git repo, Theme Forge stops writing to it —
-that is the "installed from a repository" refusal above, and it applies to your
-own repos too. Keep designing under a different name, or `git pull` your edits
-in by hand.
+```
+~/Code/omarchy-<name>-theme/
+├── .git/                    initialised, everything committed on `main`
+├── .gitignore
+├── colors.toml
+├── icons.theme
+├── preview.png              the mock desktop, 1920x1080
+├── backgrounds/
+│   └── 0-<name>.jpg
+├── README.md                install instructions and your palette
+└── LICENSE                  MIT, in the name from your git config
+```
+
+Run it again after more editing and it refreshes the same repository and
+commits the change. Your own edits to `README.md` and `LICENSE` are left
+alone — those two are only ever written when they are not already there.
+
+### Why beside, and not inside
+
+A `.git` directory inside `~/.config/omarchy/themes/<name>` is exactly what
+tells Omarchy the theme came from a stranger. Once it is there,
+`omarchy-theme-set` stops staging anything from that theme that runs code, and
+Theme Forge stops saving to it — that is the "installed from a repository"
+refusal, and it applies to your own repositories too.
+
+So publishing copies the theme out. The theme stays yours to keep editing, and
+the repository is a snapshot you refresh whenever you want.
+
+### The rest of it
+
+Publishing prints the six steps it cannot do for you:
+
+1. Create an empty GitHub repository called `omarchy-<name>-theme`.
+2. `git remote add origin <url> && git push -u origin main`
+3. Replace `YOUR-GITHUB-USERNAME` in `README.md` with your account.
+4. Screenshot a real session wearing the theme — 16:9, a terminal and an editor
+   open, the theme's own wallpaper, no cursor and nothing personal in frame.
+5. `magick preview.png -strip -resize '1200>' -quality 80 <name>.webp`
+6. Pull request to <https://github.com/omacom-io/omarchy-site> — the webp in
+   `assets/themes/` and a figure block in `themes/index.html`, alphabetically.
+
+Step 4 is the one that matters. The listing is a grid of screenshots, and
+omarchy.org will not merge a theme without one — the generated `preview.png` is
+for your repository, not for the pull request.
+
+### Checking a theme
+
+```sh
+theme-forge verify <name>
+```
+
+```
+my-theme -- as an Omarchy theme
+  ok   name                   my-theme
+  ok   colors.toml            mode and all 25 colours
+  ok   backgrounds            1 image
+  ok   icons.theme            Yaru-sage
+  ok   preview.png            the repository listing has something to show
+  ok   dropped once cloned    nothing here a clone would lose
+
+Omarchy will apply this theme
+```
+
+It checks structure, not taste: that `colors.toml` holds a mode and all 25
+colors in a form Omarchy can read, that there is a background, and that nothing
+in the directory would be silently dropped once someone clones it —
+`omarchy-theme-set` ignores any `*.lua`, `alacritty.toml`, `foot.ini`,
+`ghostty.conf`, `kitty.conf` and `vscode.json` in a theme installed from a
+repository, because each of those names a program to run. Theme Forge never
+writes one; the check is there for anything you added by hand.
+
+Contrast is not re-checked here — the solver already guarantees it, and the
+footer reports it live while you design.
 
 ---
 
@@ -736,10 +818,11 @@ tools/run-checks.sh
 Runs, in order:
 
 - `omarchy plugin validate` on the manifest
-- the palette, boundary-guard and bar-config suites under Node (4600+ assertions)
+- the palette, boundary-guard and bar-config suites under Node (5400+ assertions)
 - the same properties under Qt's V4 engine — the one `omarchy-shell` actually
   runs, and not Node
 - the image-probe refusals: an oversized PNG, a FIFO, a symlink, a non-image
+- what `verify` reports and what `export` refuses, against a throwaway `HOME`
 - `qmllint` over every QML file with the shell's own imports resolved
 
 None of it touches your desktop, writes a theme, or applies one.

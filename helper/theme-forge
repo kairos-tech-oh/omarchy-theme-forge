@@ -21,7 +21,11 @@
 #   thumb <path>             a bounded downscale into the scratch directory
 #   wallpaper <name>         draw a background from the palette on stdin
 #   adopt <name> <path>      copy a probed image in as the theme's background
-#   save <name> [--wip]      write colors.toml, read from stdin
+#   save <name> [icons] [--wip]  write colors.toml, read from stdin
+#   preview <name> <path> <bg>   the grabbed mock desktop as preview.png
+#   verify <name>            what Omarchy and omarchy.org need, as a report
+#   pick-dir                 the desktop folder chooser
+#   export <name> <dir>      build a submission-ready git repository
 #   list-wip                 the in-progress theme names
 #   discard-wip <name>       remove an in-progress theme, once it has been kept
 #   apply <name>             omarchy-theme-set
@@ -75,6 +79,10 @@ PREFS_CAP=8192
 # A theme name is at most 32 characters; a directory listing of them is small.
 LIST_CAP=32768
 
+# icons.theme is one word. The README and LICENSE an export writes are a page.
+ICONS_CAP=64
+DOC_CAP=32768
+
 # PATH_MAX is 4096, so a longer reply is not a path this system can open.
 PATH_CAP=4096
 
@@ -94,6 +102,10 @@ IM_LIMITS=(-limit memory 256MiB -limit map 256MiB -limit area 64MP -limit time 2
 
 WALLPAPER_WIDTH=3840
 WALLPAPER_HEIGHT=2160
+
+# 16:9, the shape omarchy.org's theme grid is laid out in.
+PREVIEW_WIDTH=1920
+PREVIEW_HEIGHT=1080
 
 OMARCHY_ROOT="${OMARCHY_PATH:-/usr/share/omarchy}"
 THEMES_DIR="$HOME/.config/omarchy/themes"
@@ -581,6 +593,12 @@ TOML_KEYS+='|foreground|dark_foreground|light_foreground|bright_foreground'
 TOML_KEYS+='|red|yellow|orange|green|cyan|blue|magenta|brown'
 TOML_KEYS+='|bright_red|bright_yellow|bright_green|bright_cyan|bright_blue|bright_magenta'
 
+# Every icon set Palette.iconTheme is allowed to have chosen. Deliberately the
+# plain variants only -- a shorter list is a tighter boundary, and the file's
+# whole contents go straight to `gsettings set ... icon-theme`.
+ICON_THEMES='Yaru|Yaru-blue|Yaru-magenta|Yaru-olive|Yaru-prussiangreen'
+ICON_THEMES+='|Yaru-purple|Yaru-red|Yaru-sage|Yaru-wartybrown|Yaru-yellow'
+
 toml_line_ok() {
   local line="$1"
   [[ -z $line ]] && return 0
@@ -595,8 +613,13 @@ toml_line_ok() {
 }
 
 cmd_save() {
-  local name dir body line count tmp
+  local name icons dir body line count tmp
   name=$(require_writable_theme "${1:-}") || exit $?
+  icons="${2:-}"
+  # Re-checked here rather than trusted from Palette.iconTheme: the value is
+  # about to become the whole contents of a file Omarchy hands to gsettings.
+  [[ -z $icons || $icons =~ ^($ICON_THEMES)$ ]] \
+    || refuse "'$icons' is not an icon set this will write"
 
   body=$(head -c $(( TOML_CAP + 1 )))
   if (( $(printf '%s' "$body" | wc -c) > TOML_CAP )); then
@@ -617,7 +640,365 @@ cmd_save() {
   tmp="$dir/.colors.toml.new"
   printf '%s\n' "$body" | write_new "$tmp" "$TOML_CAP" 0644 || refuse "could not write $tmp"
   mv -f -- "$tmp" "$dir/colors.toml" || refuse "could not write $dir/colors.toml"
+
+  # The one setting no Omarchy template derives, so a theme without it gets
+  # Yaru-blue whatever its palette is. Written after colors.toml and never
+  # instead of it: a theme with icons and no palette is not a theme.
+  if [[ -n $icons ]]; then
+    tmp="$dir/.icons.theme.new"
+    printf '%s\n' "$icons" | write_new "$tmp" "$ICONS_CAP" 0644 || refuse "could not write $dir/icons.theme"
+    mv -f -- "$tmp" "$dir/icons.theme" || refuse "could not write $dir/icons.theme"
+  fi
   say "$dir"
+}
+
+# ------------------------------------------------------------ the preview
+#
+# The mock desktop, grabbed by the QML side into the scratch directory and
+# handed here as a path. Re-encoded rather than moved, for the same reason
+# `adopt` re-encodes: what lands in a directory the user is about to publish
+# should be a file this helper decoded, at the size a preview is meant to be.
+cmd_preview() {
+  local name path bg dir bin out tmp fmt
+  name=$(require_writable_theme "${1:-}") || exit $?
+  path="${2:-}"
+  bg="${3:-}"
+  [[ -n $path ]] || refuse "preview needs a path"
+  valid_hex "$bg" || bg="#000000"
+
+  fmt=$(probe_format "$path") || exit $?
+  bin=$(magick_bin) || refuse "ImageMagick is not installed" "$EXIT_NO_TOOL"
+  dir="$(theme_root)/$name"
+  require_dir "$dir"
+  out="$dir/preview.png"
+  tmp="$dir/.preview.png.new"
+
+  # Fitted into 16:9 and padded with the theme's own background rather than
+  # cropped to fill: cropping a mock desktop takes the bar off the top, which
+  # is the part of a preview people look at first.
+  image_stream "$path" "$fmt" \
+    | timeout "$(remaining)" "$bin" "${IM_LIMITS[@]}" "$fmt:-" \
+        -auto-orient -resize "${PREVIEW_WIDTH}x${PREVIEW_HEIGHT}" \
+        -background "$bg" -gravity Center -extent "${PREVIEW_WIDTH}x${PREVIEW_HEIGHT}" \
+        -strip PNG24:- 2>/dev/null \
+    | write_new "$tmp" "$IMAGE_CAP" 0644
+  if (( PIPESTATUS[0] != 0 || PIPESTATUS[1] != 0 )) || [[ ! -f $tmp ]]; then
+    rm -f -- "$tmp"
+    refuse "could not draw the preview image"
+  fi
+  mv -f -- "$tmp" "$out" || refuse "could not write $out"
+  say "$out"
+}
+
+# -------------------------------------------------------------- compliance
+#
+# What Omarchy needs from a theme, and what a repository submitted to
+# omarchy.org needs on top of it. Reported as `state<TAB>label<TAB>detail`
+# lines so a caller formats rather than parses; the exit code is the summary.
+#
+# Structural only, on purpose. Contrast is decided by the solver in Palette.js,
+# and a second copy of that maths here is a second copy that can disagree.
+
+# What omarchy-theme-set drops from a theme it finds a .git in. Each of these
+# names a program to launch, so a cloned theme does not get to supply one --
+# shipping one anyway is not dangerous, it just silently does nothing.
+INSTALL_DENIED='alacritty\.toml|foot\.ini|ghostty\.conf|kitty\.conf|vscode\.json'
+
+verdict() {
+  printf '%s\t%s\t%s\n' "$1" "$2" "${3:-}"
+}
+
+cmd_verify() {
+  local name dir toml line count key seen missing dropped status
+  name=$(require_name "${1:-}") || exit $?
+  status=0
+
+  dir="$(theme_root)/$name"
+  [[ -d $dir && ! -L $dir ]] || refuse "there is no theme of yours called '$name'"
+
+  if [[ -d "$OMARCHY_ROOT/themes/$name" ]]; then
+    verdict warn "name" "Omarchy ships a theme called '$name' -- yours overlays it rather than standing alone"
+  else
+    verdict ok "name" "$name"
+  fi
+
+  toml="$dir/colors.toml"
+  if [[ ! -f $toml || -L $toml ]]; then
+    verdict no "colors.toml" "missing -- it is the whole theme"
+    status=1
+  else
+    count=0
+    seen=" "
+    while IFS= read -r line; do
+      count=$(( count + 1 ))
+      (( count > 200 )) && break
+      if ! toml_line_ok "$line"; then
+        verdict no "colors.toml" "Omarchy cannot use this line: $line"
+        status=1
+        seen=""
+        break
+      fi
+      [[ $line == *" = "* ]] && seen+="${line%% = *} "
+    done < <(head -c "$TOML_CAP" -- "$toml")
+
+    if [[ -n $seen ]]; then
+      missing=""
+      for key in mode ${TOML_KEYS//|/ }; do
+        [[ $seen == *" $key "* ]] || missing+="$key "
+      done
+      if [[ -n $missing ]]; then
+        verdict no "colors.toml" "no value for: ${missing% }"
+        status=1
+      else
+        verdict ok "colors.toml" "mode and all 25 colours"
+      fi
+    fi
+  fi
+
+  count=$(find "$dir/backgrounds" -maxdepth 1 -type f \
+            \( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' -o -iname '*.webp' \) \
+            -printf 'x' 2>/dev/null | wc -c)
+  if [[ -d "$dir/backgrounds" && ! -L "$dir/backgrounds" ]] && (( count > 0 )); then
+    verdict ok "backgrounds" "$count image$( (( count == 1 )) || printf s )"
+  else
+    verdict warn "backgrounds" "none -- Omarchy keeps whatever wallpaper is already up"
+  fi
+
+  if [[ -f "$dir/icons.theme" && ! -L "$dir/icons.theme" ]]; then
+    verdict ok "icons.theme" "$(head -c "$ICONS_CAP" -- "$dir/icons.theme" | tr -dc 'A-Za-z0-9-')"
+  else
+    verdict warn "icons.theme" "absent -- GNOME icons stay Yaru-blue whatever the accent is"
+  fi
+
+  if [[ -f "$dir/preview.png" && ! -L "$dir/preview.png" ]]; then
+    verdict ok "preview.png" "the repository listing has something to show"
+  else
+    verdict warn "preview.png" "absent -- omarchy.org will not merge a theme without a screenshot"
+  fi
+
+  dropped=""
+  while IFS= read -r line; do
+    [[ -n $line ]] || continue
+    dropped+="$line "
+  done < <(find "$dir" -maxdepth 1 -type f -regextype posix-extended \
+             -regex ".*/(.*\.lua|$INSTALL_DENIED)" -printf '%f\n' 2>/dev/null | sort | head -n 20)
+
+  if [[ -n $dropped ]]; then
+    verdict warn "dropped once cloned" "${dropped% } -- omarchy-theme-set ignores these in a theme installed from a repository"
+  else
+    verdict ok "dropped once cloned" "nothing here a clone would lose"
+  fi
+
+  exit "$status"
+}
+
+# -------------------------------------------------------------- publishing
+#
+# A theme is published by pushing a git repository and opening a pull request
+# against omacom-io/omarchy-site. This builds that repository *beside* the
+# theme rather than inside it, and the placement is the point: a `.git` in
+# ~/.config/omarchy/themes/<name> is exactly what tells Omarchy the theme came
+# from a stranger, and what tells this helper to stop saving there.
+
+# The directory the chooser handed back. Every rule require_dir applies, plus
+# one more: it has to already exist. A chooser returns a directory that does.
+require_parent_dir() {
+  local dir="${1:-}"
+  [[ -n $dir ]] || refuse "publishing needs a directory to put the repository in"
+  (( ${#dir} <= PATH_CAP )) || refuse "that path is longer than this system can open"
+  [[ $dir == /* ]] || refuse "'$dir' is not an absolute path"
+  [[ $dir != *$'\n'* ]] || refuse "that is not a path this will write to"
+  [[ -d $dir && ! -L $dir && -O $dir ]] || refuse "'$dir' is not a directory of yours to write in"
+  printf '%s' "$dir"
+}
+
+# A background's filename, joined back onto a path. `find -printf %f` is only
+# as trustworthy as the directory it read, so the name is whitelisted rather
+# than quoted -- there is no legitimate wallpaper this refuses.
+safe_basename() {
+  [[ ${1:-} =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]]
+}
+
+copy_into_repo() {
+  local src="$1" dest="$2"
+  [[ -f $src && ! -L $src ]] || return 1
+  cp -- "$src" "$dest" 2>/dev/null || refuse "could not copy ${src##*/} into the repository"
+  chmod 0644 -- "$dest" 2>/dev/null
+  return 0
+}
+
+# One hex value out of a colors.toml this helper wrote and has re-validated.
+toml_value() {
+  sed -n "s/^$1 = \"\(#[0-9a-f]\{6\}\)\"\$/\1/p" -- "$2" 2>/dev/null | head -1
+}
+
+# git, if the box has it and the user has an identity. Never fatal: the files
+# are already written, and "not a repository yet" is a sentence, not a failure.
+git_note() {
+  local dir="$1" message="$2"
+  command -v git >/dev/null 2>&1 || { printf 'git is not installed, so this is a plain directory for now'; return; }
+
+  if [[ ! -d "$dir/.git" ]]; then
+    timeout "$(remaining)" git -c init.defaultBranch=main init -q -- "$dir" >/dev/null 2>&1 \
+      || { printf 'git init did not run here'; return; }
+  fi
+  if [[ -z $(timeout 10 git -C "$dir" config --get user.email 2>/dev/null) ]]; then
+    printf 'repository created; set a git identity and commit: git config --global user.email you@example.com'
+    return
+  fi
+  timeout "$(remaining)" git -C "$dir" add -A >/dev/null 2>&1 \
+    || { printf 'repository created; git add did not run'; return; }
+  if timeout 10 git -C "$dir" diff --cached --quiet 2>/dev/null; then
+    printf 'already committed; nothing changed'
+    return
+  fi
+  # --no-verify because any hook here came from the user's init template rather
+  # than from this repository, and a theme export is not the place to run one.
+  if timeout "$(remaining)" git -C "$dir" commit --no-verify -q -m "$message" >/dev/null 2>&1; then
+    printf 'committed'
+  else
+    printf 'repository created; git commit refused it'
+  fi
+}
+
+write_repo_readme() {
+  local target="$1" name="$2" slug="$3" toml="$target/colors.toml"
+  local accent background foreground mode
+  [[ -e "$target/README.md" ]] && return 0
+
+  accent=$(toml_value accent "$toml")
+  background=$(toml_value background "$toml")
+  foreground=$(toml_value foreground "$toml")
+  mode=$(sed -n 's/^mode = "\(dark\|light\)"$/\1/p' -- "$toml" 2>/dev/null | head -1)
+
+  {
+    printf '# %s — an Omarchy theme\n\n' "$name"
+    printf 'A %s theme built with [Theme Forge](https://github.com/kairos-tech-oh/kairos.theme-forge).\n' "${mode:-dark}"
+    printf 'Say something here about where it came from — this line is the pitch.\n\n'
+    printf '![%s](preview.png)\n\n' "$name"
+    printf '## Install\n\n'
+    printf '```sh\n'
+    printf 'omarchy theme install https://github.com/YOUR-GITHUB-USERNAME/%s.git\n' "$slug"
+    printf '```\n\n'
+    printf 'That clones this repository into `~/.config/omarchy/themes` and applies it.\n'
+    printf 'Switch back to it later with `omarchy theme set %s`.\n\n' "$name"
+    printf '## What is in it\n\n'
+    printf '| File | Why it is here |\n|---|---|\n'
+    printf '| `colors.toml` | the palette, and the whole theme |\n'
+    printf '| `icons.theme` | the one setting no Omarchy template derives |\n'
+    printf '| `backgrounds/` | the wallpaper(s) |\n'
+    printf '| `preview.png` | what the listing shows |\n\n'
+    printf 'Omarchy regenerates Alacritty, foot, Ghostty, kitty, btop, Neovim, Helix,\n'
+    printf 'Hyprland, Chromium, VS Code, Obsidian and the shell palette from `colors.toml`,\n'
+    printf 'so nothing derivable is checked in — a copy here would only drift.\n\n'
+    if [[ -n $accent && -n $background && -n $foreground ]]; then
+      printf '| Role | Colour |\n|---|---|\n'
+      printf '| background | `%s` |\n' "$background"
+      printf '| foreground | `%s` |\n' "$foreground"
+      printf '| accent | `%s` |\n\n' "$accent"
+    fi
+    printf '## License\n\nMIT. See [LICENSE](LICENSE).\n'
+  } | write_new "$target/.README.md.new" "$DOC_CAP" 0644 || return 1
+  mv -f -- "$target/.README.md.new" "$target/README.md"
+}
+
+write_repo_license() {
+  local target="$1" who year
+  [[ -e "$target/LICENSE" ]] && return 0
+  who=$(timeout 5 git config --get user.name 2>/dev/null | tr -dc 'A-Za-z0-9 .,_-' | head -c 60)
+  [[ -n $who ]] || who="The theme's author"
+  year=$(date +%Y)
+
+  {
+    printf 'MIT License\n\nCopyright (c) %s %s\n\n' "$year" "$who"
+    printf 'Permission is hereby granted, free of charge, to any person obtaining a copy\n'
+    printf 'of this software and associated documentation files (the "Software"), to deal\n'
+    printf 'in the Software without restriction, including without limitation the rights\n'
+    printf 'to use, copy, modify, merge, publish, distribute, sublicense, and/or sell\n'
+    printf 'copies of the Software, and to permit persons to whom the Software is\n'
+    printf 'furnished to do so, subject to the following conditions:\n\n'
+    printf 'The above copyright notice and this permission notice shall be included in all\n'
+    printf 'copies or substantial portions of the Software.\n\n'
+    printf 'THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR\n'
+    printf 'IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\n'
+    printf 'FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE\n'
+    printf 'AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\n'
+    printf 'LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,\n'
+    printf 'OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE\n'
+    printf 'SOFTWARE.\n'
+  } | write_new "$target/.LICENSE.new" "$DOC_CAP" 0644 || return 1
+  mv -f -- "$target/.LICENSE.new" "$target/LICENSE"
+}
+
+write_repo_gitignore() {
+  local target="$1"
+  [[ -e "$target/.gitignore" ]] && return 0
+  # The scratch names this helper writes next to a real file, so a crashed
+  # export never leaves a half-written one staged.
+  printf '.*.new\n*.tmp\n' | write_new "$target/.gitignore.new" "$DOC_CAP" 0644 || return 1
+  mv -f -- "$target/.gitignore.new" "$target/.gitignore"
+}
+
+# The parent directory to publish into, from the desktop portal. Same treatment
+# as cmd_pick: a portal is another program answering over D-Bus, and nothing
+# about that makes its reply self-limiting.
+cmd_pick_dir() {
+  need_tool omarchy-file-select
+  BOUNDED_OUT=$(timeout 600 omarchy-file-select \
+      --title "Where should the theme repository go?" \
+      --directory 2>/dev/null | head -c $(( PATH_CAP + 1 )))
+  local status=${PIPESTATUS[0]}
+  (( $(printf '%s' "$BOUNDED_OUT" | wc -c) > PATH_CAP )) && refuse "that path is longer than this system can open" "$EXIT_TOO_BIG"
+  (( status != 0 )) && exit "$status"
+  say "$BOUNDED_OUT"
+}
+
+# Prints the repository path on the first line and what git did on the second.
+cmd_export() {
+  local name parent src target slug file count note
+  name=$(require_writable_theme "${1:-}") || exit $?
+  parent=$(require_parent_dir "${2:-}") || exit $?
+
+  src="$(theme_root)/$name"
+  [[ -d $src && ! -L $src ]] || refuse "there is no theme of yours called '$name'"
+  [[ -f "$src/colors.toml" ]] || refuse "'$name' has no colors.toml yet -- save it first"
+
+  slug="omarchy-$name-theme"
+  target="$parent/$slug"
+
+  # An existing target is only ever one of these to refresh, and "holds a
+  # colors.toml" is the whole test. Anything else under that name is somebody's
+  # work, and this does not get to write into it.
+  if [[ -e $target ]]; then
+    [[ -d $target && ! -L $target && -O $target ]] || refuse "$target is not a directory of yours"
+    [[ -f "$target/colors.toml" ]] || refuse "$target already exists and is not a theme repository"
+  fi
+  require_dir "$target"
+  require_dir "$target/backgrounds"
+
+  copy_into_repo "$src/colors.toml" "$target/colors.toml" || refuse "could not read $src/colors.toml"
+  copy_into_repo "$src/icons.theme" "$target/icons.theme" || true
+  copy_into_repo "$src/preview.png" "$target/preview.png" || true
+
+  count=0
+  while IFS= read -r file; do
+    (( count >= 20 )) && break
+    safe_basename "$file" || continue
+    copy_into_repo "$src/backgrounds/$file" "$target/backgrounds/$file" || continue
+    count=$(( count + 1 ))
+  done < <(find "$src/backgrounds" -maxdepth 1 -type f \
+             \( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' -o -iname '*.webp' \) \
+             -printf '%f\n' 2>/dev/null | sort | head -n 40)
+
+  # Only ever written when absent. On a second export the user's own edits to
+  # the README are what should survive, not this template.
+  write_repo_readme "$target" "$name" "$slug" || refuse "could not write $target/README.md"
+  write_repo_license "$target" || refuse "could not write $target/LICENSE"
+  write_repo_gitignore "$target" || refuse "could not write $target/.gitignore"
+
+  note=$(git_note "$target" "$name: an Omarchy theme")
+  say "$target"
+  say "$note"
 }
 
 cmd_apply() {
@@ -757,6 +1138,10 @@ case "$command" in
   wallpaper)  cmd_wallpaper "$@" ;;
   adopt)      cmd_adopt "$@" ;;
   save)       cmd_save "$@" ;;
+  preview)    cmd_preview "$@" ;;
+  verify)     cmd_verify "$@" ;;
+  pick-dir)   cmd_pick_dir "$@" ;;
+  export)     cmd_export "$@" ;;
   apply)      cmd_apply "$@" ;;
   list)       cmd_list "$@" ;;
   locked)     cmd_locked "$@" ;;

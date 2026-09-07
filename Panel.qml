@@ -689,7 +689,11 @@ Item {
     root.setStatus((root.savingWipRun ? "Parking " : "Writing ")
       + Sanitise.themeName(root.themeName) + "...", "info")
     saveProc.payload = Palette.toToml(root.colors, Sanitise.themeName(root.themeName))
-    saveProc.command = root.helperCommand("save", root.modeArgs([Sanitise.themeName(root.themeName)]), 20)
+    // The icon set rides along with the palette rather than as a step of its
+    // own: a theme with icons and no colors.toml is not a theme, so the two
+    // are one write or neither.
+    saveProc.command = root.helperCommand("save",
+      root.modeArgs([Sanitise.themeName(root.themeName), Palette.iconTheme(root.colors.accent)]), 20)
     saveProc.stdinEnabled = true
     saveProc.running = true
   }
@@ -766,6 +770,89 @@ Item {
     applyProc.command = root.helperCommand("apply", [name], 90)
     applyProc.running = true
   }
+
+  // ------------------------------------------------------------- publishing
+  //
+  // A theme is submitted to omarchy.org by pushing a git repository and opening
+  // a pull request against omacom-io/omarchy-site. Publishing here builds that
+  // repository, and it builds it *beside* the theme rather than inside it: a
+  // `.git` in ~/.config/omarchy/themes/<name> is exactly what tells Omarchy the
+  // theme came from a stranger, and what makes the helper refuse to save there
+  // again.
+  //
+  // Four steps -- grab the preview pane, hand it over as preview.png, ask where
+  // the repository goes, build it. The grab is the one file this plugin writes
+  // without the helper, because QML's ItemGrabResult has no other way out; it
+  // goes into the scratch directory the helper created and verified, and the
+  // helper re-probes and re-encodes whatever it finds there rather than
+  // trusting either the path or the bytes.
+
+  // Set by the window once the preview pane exists. Nothing is grabbed without
+  // it, and publishing carries on with no preview rather than waiting.
+  property Item publishSource: null
+  property string publishPath: ""
+  property string publishNote: ""
+
+  // A preview at roughly the width the theme listing wants, whatever size the
+  // pane happens to be on this display, and never larger than that.
+  readonly property int publishGrabWidth: 1920
+
+  function publishable() {
+    var name = Sanitise.themeName(root.themeName)
+    return name !== "" && !root.savingWip && root.userThemes.indexOf(name) !== -1
+  }
+
+  function publish() {
+    if (root.busy) return
+    if (!root.publishable()) {
+      root.setStatus("Save it as a theme first -- publishing packages what is on disk.", "error")
+      return
+    }
+    root.busy = true
+    root.publishPath = ""
+    root.publishNote = ""
+
+    var name = Sanitise.themeName(root.themeName)
+    var target = root.scratchDir === "" ? "" : root.scratchDir + "/publish-preview.png"
+    if (target === "" || root.publishSource === null || root.publishSource.width <= 0) {
+      root.startPublishChooser()
+      return
+    }
+
+    root.setStatus("Taking a picture of the preview...", "info")
+    var scale = Math.min(3, Math.max(1, root.publishGrabWidth / root.publishSource.width))
+    var background = Palette.normHex(root.colors.background) || "#000000"
+    var started = root.publishSource.grabToImage(function (result) {
+      var written = false
+      try { written = result.saveToFile(target) } catch (error) { written = false }
+      if (!written) {
+        root.startPublishChooser()
+        return
+      }
+      previewProc.command = root.helperCommand("preview", [name, target, background], 40)
+      previewProc.running = true
+    }, Qt.size(Math.round(root.publishSource.width * scale),
+               Math.round(root.publishSource.height * scale)))
+
+    if (!started) root.startPublishChooser()
+  }
+
+  function startPublishChooser() {
+    root.setStatus("Pick a folder to put the repository in...", "info")
+    pickDirProc.running = true
+  }
+
+  // The five things left to do once the repository exists, shown in the panel
+  // rather than left for the user to look up. Kept out of the generated README
+  // on purpose -- that file is for whoever installs the theme, not its author.
+  readonly property var publishSteps: [
+    "Create an empty GitHub repository with the same name as the folder.",
+    "git remote add origin <url> && git push -u origin main",
+    "Replace YOUR-GITHUB-USERNAME in README.md with your account.",
+    "Screenshot a real session wearing the theme, 16:9, terminal and editor open.",
+    "magick preview.png -strip -resize '1200>' -quality 80 <name>.webp",
+    "Open a pull request on omacom-io/omarchy-site: the webp in assets/themes/ and a figure block in themes/index.html."
+  ]
 
   // Open an existing theme so it can be edited rather than rebuilt.
   function loadTheme(name, source) {
@@ -1045,6 +1132,74 @@ Item {
       }
       currentProc.running = true
       root.setStatus("Applied. Your desktop is wearing it now.", "ok")
+    }
+  }
+
+  // Its exit codes pass through unchanged, the same as `pick`: 1 is "nothing
+  // chosen", which is a decision, and 2 is "the chooser never ran".
+  Process {
+    id: pickDirProc
+    command: [root.helperPath, "pick-dir"]
+    property string outText: ""
+    stdout: StdioCollector { waitForEnd: true; onStreamFinished: pickDirProc.outText = text }
+    onExited: function (exitCode) {
+      if (exitCode === 1) {
+        root.busy = false
+        root.setStatus("Nothing chosen. The theme is still saved.", "info")
+        return
+      }
+      if (exitCode !== 0) {
+        root.busy = false
+        root.setStatus("The folder chooser did not open.", "error")
+        return
+      }
+      var first = String(pickDirProc.outText).split("\n")[0].trim()
+      if (first.indexOf("file://") === 0) first = decodeURIComponent(first.substring(7))
+      var parent = Sanitise.absPath(first)
+      if (parent === "") {
+        root.busy = false
+        root.setStatus("That folder is not one this can write to.", "error")
+        return
+      }
+      var name = Sanitise.themeName(root.themeName)
+      root.setStatus("Building the repository...", "info")
+      exportProc.command = root.helperCommand("export", [name, parent], 60)
+      exportProc.running = true
+    }
+  }
+
+  Process {
+    id: previewProc
+    property string errText: ""
+    stderr: StdioCollector { waitForEnd: true; onStreamFinished: previewProc.errText = text }
+    onExited: function (exitCode) {
+      // A repository without a preview image is still a repository, and the
+      // author has to take a real screenshot for the submission anyway. Say
+      // nothing and carry on.
+      if (exitCode !== 0) console.log("theme-forge: no preview image -- " + Sanitise.plain(previewProc.errText))
+      root.startPublishChooser()
+    }
+  }
+
+  // Prints the repository path on the first line and what git did on the second.
+  Process {
+    id: exportProc
+    property string outText: ""
+    property string errText: ""
+    stdout: StdioCollector { waitForEnd: true; onStreamFinished: exportProc.outText = text }
+    stderr: StdioCollector { waitForEnd: true; onStreamFinished: exportProc.errText = text }
+    onExited: function (exitCode) {
+      root.busy = false
+      if (exitCode !== 0) {
+        root.setStatus(root.helperError("The repository could not be built.", exportProc.errText), "error")
+        return
+      }
+      var lines = String(exportProc.outText).split("\n")
+      root.publishPath = Sanitise.absPath(String(lines[0] || "").trim())
+      root.publishNote = Sanitise.plain(String(lines[1] || "").trim())
+      root.setStatus(root.publishPath === ""
+        ? "The repository was built."
+        : "Wrote " + Sanitise.baseName(root.publishPath) + " -- " + (root.publishNote || "ready to push"), "ok")
     }
   }
 
@@ -1331,6 +1486,9 @@ Item {
             id: previewPane
             visible: root.page === "design"
             forge: root
+            // What publishing grabs for preview.png. Handed over here rather
+            // than looked up by id, so the forge never reaches into the view.
+            Component.onCompleted: root.publishSource = previewPane
             compact: !body.wide
             x: body.wide ? editorPane.width + body.gap * 2 + 1 : 0
             y: 0

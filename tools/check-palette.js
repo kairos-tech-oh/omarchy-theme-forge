@@ -492,5 +492,56 @@ ok(P.fromToml('background = "#111111"' + NEWLINE + 'foreground = "#eeeeee"') !==
   ok(Math.abs(B.visibleAlpha("junk") - B.visibleAlpha(92)) < 1e-9, "a non-number is the default opacity")
 }
 
+// --------------------------------------------------------------- icons.theme
+//
+// The helper re-checks whatever this returns against its own whitelist before
+// it becomes the contents of a file Omarchy hands to gsettings, so the only
+// thing that matters here is that the answer is always on that list.
+
+eq(P.iconTheme("#89b4fa"), "Yaru-blue", "a blue accent picks the blue icons")
+eq(P.iconTheme("#e53935"), "Yaru-red", "a red accent picks the red icons")
+eq(P.iconTheme("#f38ba8"), "Yaru-magenta", "a pink accent picks the magenta icons")
+eq(P.iconTheme("#a6e3a1"), "Yaru-sage", "a green accent picks the sage icons")
+eq(P.iconTheme("#f9e2af"), "Yaru-yellow", "a yellow accent picks the yellow icons")
+eq(P.iconTheme("#cba6f7"), "Yaru-purple", "a violet accent picks the purple icons")
+eq(P.iconTheme("#2dd5b7"), "Yaru-prussiangreen", "a teal accent picks prussiangreen")
+eq(P.iconTheme("#a2734b"), "Yaru-wartybrown", "an orange-brown accent picks wartybrown")
+
+// A near-grey has no hue worth naming, and neither has a value that is not a
+// colour at all. Both land on Omarchy's own fallback rather than on whichever
+// band the rounding noise happened to reach.
+eq(P.iconTheme("#808080"), "Yaru-blue", "a grey accent falls back")
+eq(P.iconTheme("#ffffff"), "Yaru-blue", "white falls back")
+eq(P.iconTheme("#000000"), "Yaru-blue", "black falls back")
+eq(P.iconTheme(""), "Yaru-blue", "an empty accent falls back")
+eq(P.iconTheme(null), "Yaru-blue", "a null accent falls back")
+eq(P.iconTheme("Yaru-evil; rm -rf /"), "Yaru-blue", "a non-colour falls back")
+
+// The whole hue circle, and every rolled palette, stays inside the list the
+// helper will accept. This is the property that actually matters.
+{
+  let offList = 0
+  for (let hue = 0; hue < 360; hue++) {
+    if (P.ICON_THEMES.indexOf(P.iconTheme(P.hslToHex(hue, 0.7, 0.55))) === -1) offList++
+  }
+  eq(offList, 0, "every hue maps to an icon set the helper accepts")
+
+  let rolledOff = 0
+  for (let seed = 0; seed < 120; seed++) {
+    const dark = P.derive(P.rollSpec(seed, "dark"))
+    const light = P.derive(P.rollSpec(seed, "light"))
+    if (P.ICON_THEMES.indexOf(P.iconTheme(dark.accent)) === -1) rolledOff++
+    if (P.ICON_THEMES.indexOf(P.iconTheme(light.accent)) === -1) rolledOff++
+  }
+  eq(rolledOff, 0, "every rolled accent maps to an icon set the helper accepts")
+
+  // Deterministic, like everything else a seed reproduces.
+  eq(P.iconTheme(P.derive(P.rollSpec(7, "dark")).accent),
+     P.iconTheme(P.derive(P.rollSpec(7, "dark")).accent),
+     "the same accent always picks the same icon set")
+
+  ok(P.ICON_THEMES.every((n) => /^Yaru(-[a-z]+)?$/.test(n)), "every listed icon set is a plain Yaru name")
+}
+
 console.log((failures === 0 ? "PASS" : "FAIL") + "  " + (checks - failures) + "/" + checks + " checks")
 process.exit(failures === 0 ? 0 : 1)

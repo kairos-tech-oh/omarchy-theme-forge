@@ -713,3 +713,39 @@ function fromToml(text) {
     overrides: overrides
   })
 }
+
+// ---------------------------------------------------------------- icons.theme
+//
+// The one thing about a theme that no Omarchy template derives: GNOME's icon
+// set. Without the file Omarchy falls back to Yaru-blue whatever the palette is.
+//
+// Only the plain variants, no `-dark`: the helper re-checks the answer against
+// this same list before writing it, and a shorter list is a tighter boundary.
+var ICON_THEMES = [
+  "Yaru", "Yaru-blue", "Yaru-magenta", "Yaru-olive", "Yaru-prussiangreen",
+  "Yaru-purple", "Yaru-red", "Yaru-sage", "Yaru-wartybrown", "Yaru-yellow"
+]
+
+// Upper hue bound -> icon set. Ordered, so the first band the hue fits wins.
+var ICON_BANDS = [
+  [14, "Yaru-red"], [38, "Yaru-wartybrown"], [69, "Yaru-yellow"],
+  [99, "Yaru-olive"], [159, "Yaru-sage"], [199, "Yaru-prussiangreen"],
+  [259, "Yaru-blue"], [299, "Yaru-purple"], [344, "Yaru-magenta"],
+  [360, "Yaru-red"]
+]
+
+// A near-grey accent has no hue worth naming, so it gets Omarchy's own default
+// rather than whichever band the rounding noise happened to land in.
+var ICON_MIN_SAT = 0.12
+
+function iconTheme(accent) {
+  var hex = normHex(accent)
+  if (hex === "") return "Yaru-blue"
+  var hsl = hexToHsl(hex)
+  if (hsl.s < ICON_MIN_SAT) return "Yaru-blue"
+  var hue = ((hsl.h % 360) + 360) % 360
+  for (var i = 0; i < ICON_BANDS.length; i++) {
+    if (hue <= ICON_BANDS[i][0]) return ICON_BANDS[i][1]
+  }
+  return "Yaru-blue"
+}

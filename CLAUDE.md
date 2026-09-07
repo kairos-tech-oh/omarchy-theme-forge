@@ -12,8 +12,9 @@ detail beyond the architecture below.
 
 ```sh
 tools/run-checks.sh          # every check; nothing touches the desktop or writes a theme
-node tools/check-palette.js  # just the JS suite (Palette.js + Sanitise.js + BarStyle.js under Node, 4600+ assertions)
+node tools/check-palette.js  # just the JS suite (Palette.js + Sanitise.js + BarStyle.js under Node, 5400+ assertions)
 tools/check-probe.sh         # helper/reader.py refusal tests (needs python3 + ImageMagick)
+tools/check-export.sh        # verify/export against a throwaway HOME (needs node + ImageMagick)
 QT_QPA_PLATFORM=offscreen /usr/lib/qt6/bin/qml tools/check-qml-engine.qml   # the JS suite under Qt's V4 engine
 ```
 
@@ -113,12 +114,38 @@ installed Omarchy shell.
    `root.handPins` in `Panel.qml`, separate from `spec.overrides` (an override
    is an exact value to show; a lock is what a roll steps around).
 
+### Publishing is an export, never a git init in place
+
+`helper/theme-forge export <name> <parent>` copies a saved theme into
+`<parent>/omarchy-<name>-theme`, adds a README, an MIT LICENSE and a
+`.gitignore` (each only when absent, so a second export keeps the author's
+words), and runs `git init/add/commit --no-verify`. The parent comes from
+`omarchy-file-select --directory` via the helper's `pick-dir` and is re-checked
+in `require_parent_dir()`.
+
+It must stay an export. A `.git` inside `~/.config/omarchy/themes/<name>` is
+what makes `omarchy-theme-set` treat the theme as a stranger's *and* what makes
+`require_writable_theme()` refuse to save there — publishing in place would cost
+the user the theme.
+
+`helper/theme-forge verify <name>` is the structural compliance check behind
+`theme-forge verify`: keys, mode, backgrounds, and the files a clone would drop.
+Contrast deliberately stays out of it — the solver in `Palette.js` is the one
+source of truth for the maths.
+
+`preview.png` is the one file the QML side writes itself: `grabToImage()` into
+the helper-verified scratch directory, then `cmd_preview` re-probes and
+re-encodes it, exactly like an image picked off disk.
+
 ### Output and state
 
-- A theme is `~/.config/omarchy/themes/<name>/colors.toml` +
-  `backgrounds/0-<name>.jpg`. `omarchy-theme-set` regenerates Alacritty, foot,
-  Ghostty, kitty, btop, Neovim, Helix, Hyprland, Chromium, VS Code, Obsidian and
-  the shell palette from that one file.
+- A theme is `~/.config/omarchy/themes/<name>/colors.toml` + `icons.theme` +
+  `backgrounds/0-<name>.jpg`, plus a `preview.png` once it has been published.
+  `omarchy-theme-set` regenerates Alacritty, foot, Ghostty, kitty, btop, Neovim,
+  Helix, Hyprland, Chromium, VS Code, Obsidian and the shell palette from
+  `colors.toml`; `icons.theme` is the one setting no template derives, and
+  `Palette.iconTheme()` picks it from the accent's hue against a fixed list the
+  helper re-checks.
 - In-progress themes live at `~/.local/state/kairos.theme-forge/wip/<name>/` —
   real theme directories that Omarchy's theme list simply never scans.
 - `~/.local/state/kairos.theme-forge/draft.json` (auto-saved palette) and

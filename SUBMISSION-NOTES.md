@@ -356,6 +356,14 @@ Both suites feed it values shaped to break out — a forged `mode = "light"` lin
 `; rm -rf /`, `<img src=...>`, an embedded NUL — and assert that no line of the
 output escapes the allowed grammar.
 
+`icons.theme` gets the same treatment on a smaller scale. Its whole contents
+become the value `omarchy-theme-set-gnome` passes to `gsettings set
+org.gnome.desktop.interface icon-theme`, so it is not a free string:
+`Palette.iconTheme()` returns one of ten fixed Yaru names chosen from the
+accent's hue, and `cmd_save` re-checks the answer against that same list before
+writing it. Both suites assert that the whole hue circle and every rolled accent
+land on the list, and that a non-color falls back rather than passing through.
+
 ## What it refuses to write to
 
 Enforced in `require_writable_theme()` in the helper, and mirrored in the UI:
@@ -366,6 +374,57 @@ Enforced in `require_writable_theme()` in the helper, and mirrored in the UI:
 
 It never edits `~/.config/hypr/`, keybindings, or `shell.json`, and it runs
 `omarchy-theme-set` only from an explicit button press.
+
+## Publishing, and the one directory it does not own
+
+`export` is the only thing here that writes outside
+`~/.config/omarchy/themes` and `~/.local/state/kairos.theme-forge`, so it is the
+one place a path the plugin did not construct becomes a destination.
+
+The path comes from the desktop folder chooser — `omarchy-file-select
+--directory`, run from the helper so its reply passes the same byte ceiling as
+every other producer, exactly as the image chooser already does. It is then
+re-checked in `require_parent_dir()` rather than trusted from the portal:
+absolute, no newline, within `PATH_MAX`, and an existing directory that is not a
+symlink and is owned by this user. A chooser returns a directory that already
+exists; a forged reply need not.
+
+The destination inside it is `omarchy-<name>-theme`, built from a name that has
+already passed the whitelist, never from anything the user typed free-form. If
+that directory already exists it has to hold a `colors.toml` — "is one of ours
+to refresh" is the whole test, and anything else under that name is somebody's
+work this does not get to write into. `README.md`, `LICENSE` and `.gitignore`
+are written only when absent, so a second export never overwrites an author's
+own words. Backgrounds are copied by a name matched against
+`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$` and capped at twenty files.
+
+It writes the repository **beside** the theme and never inside it. That is not
+tidiness: a `.git` in `~/.config/omarchy/themes/<name>` is precisely what makes
+`omarchy-theme-set` treat the theme as a stranger's and what makes
+`require_writable_theme()` refuse to save there again. Publishing must not cost
+the user the ability to keep editing.
+
+`git` is invoked as `init`, `add -A` and `commit --no-verify`, each under the
+request budget, in a directory this helper just created. `--no-verify` because
+any hook present came from the user's own `init.templateDir` rather than from
+this repository, and a theme export is not the occasion to run one. Nothing here
+adds a remote, pushes, or reaches the network; the six steps that do are printed
+for the user to run. A missing `git`, or a missing git identity, is a sentence on
+the second line of the output rather than a failure — the files are already
+written.
+
+### The one file QML writes
+
+`preview.png` starts as `Item.grabToImage()` in `Panel.qml`, and
+`ItemGrabResult.saveToFile()` is the only way a grab leaves the scene graph — so
+this is the single place the QML side writes a file without the helper. It
+writes one fixed name inside the scratch directory the helper created and
+verified as private and owned (`$XDG_RUNTIME_DIR/kairos-theme-forge`, never
+`/tmp`), and nothing downstream trusts it: `cmd_preview` re-probes the path
+through `reader.py` and re-encodes the bytes through ImageMagick under a pinned
+coder, the same treatment an image the user picked off their disk gets. If the
+scratch directory is unavailable, or the grab fails, publishing carries on
+without a preview rather than stopping.
 
 ## What it reads from the shell
 
@@ -411,11 +470,13 @@ tools/run-checks.sh
 ```
 
 - `omarchy plugin validate` — exit 0
-- 4616 assertions under Node
+- 5488 assertions under Node
 - the same properties under Qt's V4 engine (`tools/check-qml-engine.qml`), which
   is the engine omarchy-shell runs and is not Node — the theme-name guard is
   regex, and V4's regex engine is the one that has to agree
 - the image-probe refusals, including the FIFO and symlink cases
+- `tools/check-export.sh` — what `verify` reports and what `export` refuses,
+  against a throwaway `HOME` so it can never see one of the user's own themes
 - `qmllint` over every QML file with `qs.Commons` and `qs.Ui` resolved
 
 ## Tested against a hard-refreshed shell

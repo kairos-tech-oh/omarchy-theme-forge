@@ -8,7 +8,7 @@ theme. Theme Forge is the missing one: roll a palette, tune any of the
 twenty-six colors by hand, or seed the whole thing from a wallpaper — then save
 a real theme directory and apply it, with one click to put your old theme back.
 
-![Theme Forge with the preview bar mirroring Rice Bar and a hovered token](preview.png)
+![Theme Forge with the preview bar mirroring the user's own and a hovered token](preview.png)
 
 ---
 
@@ -62,9 +62,9 @@ contrast readout per key. It repaints on every slider frame, costs nothing, and
 changes nothing on your actual desktop.
 
 **Draws the bar you actually have.** Whichever edge yours sits on, see-through
-or solid, and — if you use [Rice Bar](https://github.com/jcarcinogen/omarchy-rice-bar)
-— its preset, opacity, radius and gap, read from the shell as they change. A
-theme is judged against the bar you look at all day, not the default one.
+or solid, and the widgets you keep in each section, read from the shell as they
+change. A theme is judged against the bar you look at all day, not the default
+one.
 
 **Edit by pointing at things.** Hover anything in the preview and it names the
 color it wears; click it and the color wheel opens on that color. Nobody
@@ -370,11 +370,6 @@ rather than from a file of its own:
 - **your widgets** — the stock ones by glyph, anything else as a small chip, in
   the sections you keep them in, so the bar takes up the room it really does
 - **the clock's format** — the same `format` string, rendered at a fixed time
-- **Rice Bar** — when it is installed and in your layout, its preset with your
-  opacity, radius, gap and border, using the same color rules the plugin
-  itself uses (the bar ground, darkened for *glow* and *mono*, tinted toward
-  the accent for *material*, lifted to an opacity the bar text still reads at).
-  *Powerline*'s angled ends are drawn square at this size.
 
 If you would rather see the stock Omarchy bar — what someone without your
 settings gets — turn **Draw the bar the way mine is set up** off in Settings.

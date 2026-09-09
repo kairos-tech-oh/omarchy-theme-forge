@@ -430,17 +430,15 @@ without a preview rather than stopping.
 
 The preview draws its bar the way the user's bar is configured. That comes from
 the `shell` object the panel loader injects into every panel plugin — its
-`barConfig` is the `bar` subtree of `shell.json` as the shell itself parsed it,
-and `pluginRegistry.installedPlugins` says whether Rice Bar is present. The
-plugin opens no file of its own for this and adds no helper subcommand; it reads
+`barConfig` is the `bar` subtree of `shell.json` as the shell itself parsed it.
+The plugin opens no file of its own for this and adds no helper subcommand; it reads
 properties on an object it was handed, and the bindings follow the shell when
 that object is replaced.
 
 What arrives is still treated as untrusted shape. `BarStyle.js` is a pure
-library with no I/O, and everything it accepts is bounded: positions and presets
-are matched against a fixed list, widget ids against a short character class,
-numbers are clamped to Rice Bar's own ranges, a section keeps at most eight
-widgets, and a clock format is capped at forty characters with control
+library with no I/O, and everything it accepts is bounded: a position is matched
+against a fixed list, widget ids against a short character class, a section keeps
+at most eight widgets, and a clock format is capped at forty characters with control
 characters stripped. A malformed or missing config produces the stock bar, never
 an exception in the preview. Both test suites feed it hostile layouts.
 

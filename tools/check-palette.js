@@ -366,7 +366,7 @@ ok(P.fromToml('background = "#111111"' + NEWLINE + 'foreground = "#eeeeee"') !==
   eq(P.chaosSpec("junk", "dark").seed, 0, "a bad seed is clamped")
 }
 
-// ------------------------------------------------------- Rice Bar's colours
+// ---------------------------------------------------- readable surfaces
 
 {
   eq(P.contrastSurface("#101315", "#cacccc", "#7aa2f7"), "#101315", "a readable ground is kept as the surface")
@@ -388,10 +388,9 @@ ok(P.fromToml('background = "#111111"' + NEWLINE + 'foreground = "#eeeeee"') !==
 // ------------------------------------------------------------- the bar
 
 {
-  const stock = B.resolve(null, false)
+  const stock = B.resolve(null)
   eq(stock.position, "top", "no config is a top bar")
   eq(stock.transparent, false, "no config is a solid bar")
-  eq(stock.rice, null, "no config has no Rice Bar")
   eq(stock.widgets.left[0], "omarchy.menu", "the stock bar starts with the menu")
   eq(B.describe(stock), "top, solid", "the stock bar is described plainly")
   eq(B.describe(null), "stock Omarchy bar", "describe survives nothing at all")
@@ -401,7 +400,7 @@ ok(P.fromToml('background = "#111111"' + NEWLINE + 'foreground = "#eeeeee"') !==
     center: [{ id: "omarchy.clock", format: "dddd HH:mm", verticalFormat: "HH" + NEWLINE + "mm" }],
     right: [{ id: "omarchy.tray" }, { id: "omarchy.power" }]
   }
-  const plain = B.resolve({ position: "bottom", transparent: true, layout: layout }, false)
+  const plain = B.resolve({ position: "bottom", transparent: true, layout: layout })
   eq(plain.position, "bottom", "position is read")
   eq(plain.vertical, false, "bottom is horizontal")
   eq(plain.transparent, true, "transparency is read")
@@ -411,63 +410,17 @@ ok(P.fromToml('background = "#111111"' + NEWLINE + 'foreground = "#eeeeee"') !==
   eq(plain.clockFormatVertical, "HH" + NEWLINE + "mm", "a newline in the vertical format is kept")
   eq(B.describe(plain), "bottom, see-through", "a transparent bar is described as see-through")
 
-  eq(B.resolve({ position: " LEFT " }, false).vertical, true, "position is trimmed and lowercased")
-  eq(B.resolve({ position: "sideways" }, false).position, "top", "an unknown position is the top")
-  eq(B.resolve({ position: "right" }, false).vertical, true, "right is vertical")
-  eq(B.resolve("nonsense", false).position, "top", "a non-object config is the stock bar")
-  eq(B.resolve({ layout: "nonsense" }, false).widgets.center[0], "omarchy.clock", "a non-object layout keeps the stock widgets")
-  eq(B.resolve({ layout: { left: "nope" } }, false).widgets.left.length, 0, "a non-array section is empty")
+  eq(B.resolve({ position: " LEFT " }).vertical, true, "position is trimmed and lowercased")
+  eq(B.resolve({ position: "sideways" }).position, "top", "an unknown position is the top")
+  eq(B.resolve({ position: "right" }).vertical, true, "right is vertical")
+  eq(B.resolve("nonsense").position, "top", "a non-object config is the stock bar")
+  eq(B.resolve({ layout: "nonsense" }).widgets.center[0], "omarchy.clock", "a non-object layout keeps the stock widgets")
+  eq(B.resolve({ layout: { left: "nope" } }).widgets.left.length, 0, "a non-array section is empty")
 
-  const foreign = B.resolve({ id: "someone.other-bar", layout: layout }, true)
+  const foreign = B.resolve({ id: "someone.other-bar", layout: layout })
   eq(foreign.foreign, "someone.other-bar", "a different bar plugin is noticed")
   ok(B.describe(foreign).indexOf("cannot draw") !== -1, "and said so in the description")
-  eq(B.resolve({ id: "omarchy.bar" }, false).foreign, "", "the stock bar id is not foreign")
-
-  // Rice Bar, as this user's shell.json actually has it.
-  const riceEntry = {
-    id: B.RICE_ID, preset: "glow", opacity: 82, radius: 16, gap: 8, border: true,
-    profiles: { pills: { opacity: 90, radius: 18, gap: 3, border: true } },
-    profileVersion: 1, activeProfile: "glow"
-  }
-  const riced = B.resolve({ position: "top", layout: { left: [{ id: "omarchy.menu" }, riceEntry], center: [], right: [] } }, true)
-  ok(riced.rice !== null, "an installed Rice Bar in the layout is found")
-  eq(riced.rice.preset, "glow", "its preset is read")
-  eq(riced.rice.opacity, 82, "its opacity is the flat value when the active profile matches")
-  eq(riced.rice.decoration, "glow", "the recipe follows the preset")
-  eq(riced.rice.geometry, "sections", "glow is one surface per section")
-  eq(riced.transparent, true, "Rice Bar makes the stock bar see-through")
-  eq(riced.widgets.left.join(","), "omarchy.menu", "Rice Bar's own widget is not drawn")
-  eq(B.describe(riced), "top, Rice Bar glow", "described with its preset")
-
-  const notInstalled = B.resolve({ layout: { left: [riceEntry] } }, false)
-  eq(notInstalled.rice, null, "an entry without the plugin installed is ignored")
-  eq(notInstalled.transparent, false, "and the bar stays solid")
-
-  // Switched presets keep the previous preset's appearance under profiles;
-  // the flat values on the entry belong to activeProfile, not to preset.
-  const switched = B.riceSettings({
-    preset: "pills", opacity: 82, radius: 16, gap: 8, border: true,
-    profiles: { pills: { opacity: 70, radius: 10, gap: 2, border: false } },
-    profileVersion: 1, activeProfile: "glow"
-  })
-  eq(switched.preset, "pills", "the preset wins")
-  eq(switched.opacity, 70, "its appearance comes from its profile, not the flat values")
-  eq(switched.border, false, "including the border flag")
-  eq(switched.geometry, "widgets", "pills is one surface per widget")
-
-  const bare = B.riceSettings({ preset: "material" })
-  eq(bare.opacity, 92, "a preset with no appearance takes its defaults")
-  eq(bare.radius, 20, "including the radius")
-  eq(B.riceSettings({ preset: "glass" }).preset, "islands", "an unknown preset is islands")
-  eq(B.riceSettings({ preset: "stock" }).preset, "omarchy", "stock is a name for the plain bar")
-  eq(B.resolve({ layout: { left: [{ id: B.RICE_ID, preset: "omarchy" }] } }, true).rice, null, "the omarchy preset paints nothing")
-
-  const clamped = B.riceSettings({ preset: "islands", opacity: 500, radius: -3, gap: "8", border: "false" })
-  eq(clamped.opacity, 100, "opacity is clamped high")
-  eq(clamped.radius, 0, "radius is clamped low")
-  eq(clamped.gap, 8, "a numeric string is a number")
-  eq(clamped.border, false, "a string false is false")
-  eq(B.riceSettings({ preset: "islands", opacity: "lots" }).opacity, 92, "a non-number falls back")
+  eq(B.resolve({ id: "omarchy.bar" }).foreign, "", "the stock bar id is not foreign")
 
   // Bounds. A layout is the user's own file, but a hostile one must still
   // produce something small.
@@ -477,7 +430,7 @@ ok(P.fromToml('background = "#111111"' + NEWLINE + 'foreground = "#eeeeee"') !==
   many.push({ id: repeat("x", 300) })
   many.push({ id: "" })
   many.push("not-an-object")
-  const capped = B.resolve({ layout: { left: many } }, false)
+  const capped = B.resolve({ layout: { left: many } })
   eq(capped.widgets.left.length, 8, "a section is capped at eight widgets")
   ok(capped.widgets.left.every((id) => /^[A-Za-z0-9._-]{1,80}$/.test(id)), "every kept id is a plain id")
 
@@ -486,10 +439,6 @@ ok(P.fromToml('background = "#111111"' + NEWLINE + 'foreground = "#eeeeee"') !==
   eq(B.clockFormat("", "x"), "x", "an empty format falls back")
   eq(B.clockFormat(null, "x"), "x", "a missing format falls back")
 
-  ok(Math.abs(B.visibleAlpha(82) - 0.8776) < 0.001, "visibleAlpha follows Rice Bar's floor")
-  ok(Math.abs(B.visibleAlpha(20) - 0.456) < 0.001, "20% still leaves nearly half")
-  eq(B.visibleAlpha(100), 1, "100% is opaque")
-  ok(Math.abs(B.visibleAlpha("junk") - B.visibleAlpha(92)) < 1e-9, "a non-number is the default opacity")
 }
 
 // --------------------------------------------------------------- icons.theme

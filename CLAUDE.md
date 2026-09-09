@@ -53,7 +53,7 @@ output:
 |---|---|---|---|
 | `Palette.js` | QML `.js` (`.pragma library`) | All colour maths — harmony, the contrast solver, hex/HSL | Any I/O, `Process`, or QML type |
 | `Sanitise.js` | QML `.js` (`.pragma library`) | Boundary guards: theme names, filesystem paths, plain-text for `Text` | Any I/O |
-| `BarStyle.js` | QML `.js` (`.pragma library`) | Turns the shell's injected `barConfig` (position, transparency, Rice Bar preset, widget layout) into a bounded description the preview draws from | Any I/O; trusting the config's shape |
+| `BarStyle.js` | QML `.js` (`.pragma library`) | Turns the shell's injected `barConfig` (position, transparency, widget layout) into a bounded description the preview draws from | Any I/O; trusting the config's shape |
 | `helper/theme-forge` | bash | **Every** filesystem write, subprocess, and desktop change | Any colour maths |
 | `helper/reader.py` | python3 | Bounded, `O_NOFOLLOW`/`O_NONBLOCK` reads; image-header probe before any decoder sees a file | — |
 | `Panel.qml` … `*.qml` | QML | The window, state, and wiring | Touch the disk except through the helper |

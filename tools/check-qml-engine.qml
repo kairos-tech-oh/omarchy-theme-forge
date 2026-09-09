@@ -144,7 +144,7 @@ QtObject {
     if (Sanitise.hexList("#AABBC").length !== 0) return fail(32)
     if (Sanitise.nameList("tron\n../evil\nTokyo Night\nnord").join(",") !== "tron,nord") return fail(32)
 
-    // 33-34: Rice Bar's colour rules, which the preview's bar is painted with.
+    // 33-34: readable surfaces over a ground the text has to survive.
     if (Palette.contrastSurface("#101315", "#cacccc", "#7aa2f7") !== "#101315") return fail(33)
     if (Palette.contrastSurface("#ffffff", "#ffffff", "#ffffff") !== "#000000") return fail(33)
     var lifted = Palette.readableAlpha("#000000", "#ffffff", 0.5)
@@ -153,27 +153,24 @@ QtObject {
 
     // 35-40: the bar description. Shape checks on a plain object, so V4's
     // Array.isArray, Number and regex behaviour is what is being confirmed.
-    var stock = BarStyle.resolve(null, false)
-    if (stock.position !== "top" || stock.rice !== null || stock.transparent !== false) return fail(35)
-    var riceEntry = {
-      id: BarStyle.RICE_ID, preset: "glow", opacity: 82, radius: 16, gap: 8, border: true,
-      profileVersion: 1, activeProfile: "glow"
-    }
-    var riced = BarStyle.resolve({ position: "bottom", layout: { left: [{ id: "omarchy.menu" }, riceEntry] } }, true)
-    if (!riced.rice || riced.rice.preset !== "glow" || riced.rice.opacity !== 82) return fail(36)
-    if (riced.transparent !== true || riced.position !== "bottom") return fail(36)
-    if (riced.widgets.left.length !== 1 || riced.widgets.left[0] !== "omarchy.menu") return fail(36)
-    if (BarStyle.resolve({ layout: { left: [riceEntry] } }, false).rice !== null) return fail(36)
-    if (BarStyle.resolve({ position: " LEFT " }, false).vertical !== true) return fail(37)
-    if (BarStyle.resolve({ position: "sideways" }, false).position !== "top") return fail(37)
+    var stock = BarStyle.resolve(null)
+    if (stock.position !== "top" || stock.transparent !== false) return fail(35)
+    var mine = BarStyle.resolve({
+      position: "bottom", transparent: true,
+      layout: { left: [{ id: "omarchy.menu" }, { id: "omarchy.spacer" }] }
+    })
+    if (mine.transparent !== true || mine.position !== "bottom") return fail(36)
+    if (mine.widgets.left.length !== 1 || mine.widgets.left[0] !== "omarchy.menu") return fail(36)
+    if (BarStyle.resolve({ position: " LEFT " }).vertical !== true) return fail(37)
+    if (BarStyle.resolve({ position: "sideways" }).position !== "top") return fail(37)
     var many = []
     for (var m = 0; m < 40; m++) many.push({ id: "some.widget" + m })
     many.push({ id: "../evil" })
     many.push({ id: "omarchy.spacer" })
-    if (BarStyle.resolve({ layout: { left: many } }, false).widgets.left.length !== 8) return fail(38)
+    if (BarStyle.resolve({ layout: { left: many } }).widgets.left.length !== 8) return fail(38)
     if (BarStyle.clockFormat("HH\t:mm\u0000", "x") !== "HH:mm") return fail(39)
     if (BarStyle.clockFormat("HH\nmm", "x") !== "HH\nmm") return fail(39)
-    if (BarStyle.describe(riced) !== "bottom, Rice Bar glow") return fail(40)
+    if (BarStyle.describe(mine) !== "bottom, see-through") return fail(40)
     if (BarStyle.describe(stock) !== "top, solid") return fail(40)
 
     // 41: a pinned foreground or accent is kept exactly and feeds what derives

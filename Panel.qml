@@ -352,7 +352,7 @@ Item {
   property string page: "design"     // design | settings
   property bool wheelOpen: false
   // Whether the preview's bar copies the user's own -- position, transparency,
-  // Rice Bar preset -- or the stock Omarchy bar everyone else would see.
+  // widget layout -- or the stock Omarchy bar everyone else would see.
   property bool mirrorBar: true
   // How large the widgets in the preview's bar are drawn, as a fraction of
   // true-to-scale. Below 1 the bar reads as a bar rather than a crowd.
@@ -445,18 +445,10 @@ Item {
   // Read from the shell object the panel loader injects, never from a file:
   // `shell.barConfig` is the `bar` subtree of shell.json as the shell itself
   // parsed it, and it is replaced whenever the bar settings change, so the
-  // preview follows a moved bar or a switched Rice Bar preset with no I/O of
-  // its own. Without a shell (a stale loader, a future host) it is a stock bar.
+  // preview follows a moved or restyled bar with no I/O of its own. Without a
+  // shell (a stale loader, a future host) it is a stock bar.
 
-  readonly property bool riceInstalled: {
-    if (!root.shell || !root.shell.pluginRegistry) return false
-    var installed = root.shell.pluginRegistry.installedPlugins
-    if (!installed || !installed[BarStyle.RICE_ID]) return false
-    var config = root.shell.shellConfig
-    var disabled = config && Array.isArray(config.disabledPlugins) ? config.disabledPlugins : []
-    return disabled.indexOf(BarStyle.RICE_ID) === -1
-  }
-  readonly property var ownBar: BarStyle.resolve(root.shell ? root.shell.barConfig : null, root.riceInstalled)
+  readonly property var ownBar: BarStyle.resolve(root.shell ? root.shell.barConfig : null)
   readonly property var previewBar: root.mirrorBar ? root.ownBar : BarStyle.stock()
 
   // ------------------------------------------------- editing from the preview

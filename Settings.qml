@@ -183,7 +183,7 @@ Item {
           label: "Draw the bar the way mine is set up"
           description: settings.forge.mirrorBar
             ? "Yours right now: " + BarStyle.describe(settings.forge.ownBar) + ". "
-              + "Which edge, see-through or solid, and Rice Bar's preset if you use it, "
+              + "Which edge, see-through or solid, and which widgets sit where, "
               + "read from the shell as it changes."
             : "Showing the stock Omarchy bar instead \u2014 what someone without your "
               + "bar settings would see. Yours is " + BarStyle.describe(settings.forge.ownBar) + "."

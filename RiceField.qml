@@ -1,5 +1,6 @@
 import QtQuick
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui
 
 // A text field wearing the same glow surface as the buttons.
@@ -15,10 +16,10 @@ import qs.Ui
 TextField {
   id: field
 
-  property color tint: Color.menu.background
+  property color tint: Commons.Color.menu.background
   property real fillAlpha: 0.82
   property int cornerRadius: 16
-  property color edgeColor: Color.flatColor(Color.pick("hyprland.active-border", Color.accent), Color.accent)
+  property color edgeColor: Commons.Color.flatColor(Commons.Color.pick("hyprland.active-border", Commons.Color.accent), Commons.Color.accent)
 
   // The glow rings take four pixels a side, so the text needs to start further
   // in than it would in a plain field.

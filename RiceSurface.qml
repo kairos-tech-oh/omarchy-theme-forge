@@ -1,5 +1,6 @@
 import QtQuick
 import qs.Commons
+import qs.Commons as Commons
 
 // The chrome behind a control, drawn the way Rice Bar's `glow` preset draws the
 // chrome behind a bar section.
@@ -24,12 +25,12 @@ Item {
 
   // The colour the fill is darkened from. Defaults to the window ground so a
   // control reads as carved out of the surface it sits on.
-  property color tint: Color.menu.background
+  property color tint: Commons.Color.menu.background
 
   // The theme's lit edge. `hyprland.active-border` is what Hyprland draws
   // around the focused window and what the shell feeds to its popup, menu and
   // notification borders, so a control wearing it belongs to the same desktop.
-  property color edge: Color.flatColor(Color.pick("hyprland.active-border", Color.accent), Color.accent)
+  property color edge: Commons.Color.flatColor(Commons.Color.pick("hyprland.active-border", Commons.Color.accent), Commons.Color.accent)
 
   property real fillAlpha: 0.82
   property int cornerRadius: 16
@@ -61,7 +62,7 @@ Item {
       ? surface._withAlpha(surface.edge, surface.hovered ? 1.0 : 0.75)
       : "transparent"
 
-    Behavior on border.color { ColorAnimation { duration: 120 } }
+    Behavior on border.color { ColorAnimation { duration: Style.duration(120) } }
 
     Rectangle {
       anchors.fill: parent
@@ -72,7 +73,7 @@ Item {
         Qt.darker(surface.tint, surface.pressed ? 1.10 : (surface.hovered ? 1.18 : 1.28)),
         surface._alpha)
 
-      Behavior on color { ColorAnimation { duration: 120 } }
+      Behavior on color { ColorAnimation { duration: Style.duration(120) } }
     }
 
     // The two inner rings. Their alphas scale with the fill's, so turning the

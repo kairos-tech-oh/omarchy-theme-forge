@@ -1,5 +1,6 @@
 import QtQuick
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui
 import "Sanitise.js" as Sanitise
 
@@ -23,11 +24,11 @@ Item {
   property string text: ""
   property string tooltipText: ""
   property bool selected: false
-  property color foreground: Color.menu.text
-  property color accent: Color.accent
-  property color tint: Color.menu.background
+  property color foreground: Commons.Color.menu.text
+  property color accent: Commons.Color.accent
+  property color tint: Commons.Color.menu.background
   // The theme's lit window edge, which is what the glow preset outlines with.
-  property color edgeColor: Color.flatColor(Color.pick("hyprland.active-border", Color.accent), Color.accent)
+  property color edgeColor: Commons.Color.flatColor(Commons.Color.pick("hyprland.active-border", Commons.Color.accent), Commons.Color.accent)
   property string fontFamily: Style.font.menuFamily
   property real fontSize: Style.font.body
   property real horizontalPadding: Style.spacing.controlPaddingX

@@ -2,6 +2,7 @@ import QtQuick
 import Quickshell
 import Quickshell.Io
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui
 import "Palette.js" as Palette
 import "Sanitise.js" as Sanitise
@@ -1262,12 +1263,12 @@ Item {
   // theme's own background and never against the wallpaper behind the window.
   // A translucent preview would make this tool lie about the thing it exists to
   // show.
-  readonly property color surface: Qt.rgba(Color.menu.background.r,
-                                           Color.menu.background.g,
-                                           Color.menu.background.b,
+  readonly property color surface: Qt.rgba(Commons.Color.menu.background.r,
+                                           Commons.Color.menu.background.g,
+                                           Commons.Color.menu.background.b,
                                            root.surfaceAlpha)
-  readonly property color ink: Color.menu.text
-  readonly property color accentColor: Color.accent
+  readonly property color ink: Commons.Color.menu.text
+  readonly property color accentColor: Commons.Color.accent
   readonly property color dim: Qt.rgba(ink.r, ink.g, ink.b, 0.55)
   readonly property color faint: Qt.rgba(ink.r, ink.g, ink.b, 0.28)
   readonly property color hairline: Qt.rgba(ink.r, ink.g, ink.b, 0.12)

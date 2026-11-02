@@ -75,7 +75,7 @@ Item {
     color: forge.ink
     visible: flick.contentHeight > flick.height
     opacity: flick.moving ? 0.55 : 0.22
-    Behavior on opacity { NumberAnimation { duration: 160 } }
+    Behavior on opacity { NumberAnimation { duration: Style.duration(160) } }
     z: 2
   }
 

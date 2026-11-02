@@ -92,7 +92,10 @@ and opens the wheel. `Rice*.qml` (`RiceButton`,
 shell's own `Button` — see the Credits section of the README.
 
 QML imports `qs.Commons` and `qs.Ui` (the `Style` singleton, etc.) from the
-installed Omarchy shell.
+installed Omarchy shell. Since Qt 6.12 a bare `Color` resolves to QtQuick's own
+type, so palette references are always `Commons.Color` (via `import qs.Commons
+as Commons`), and every animation `duration:` is `Style.duration(ms)`;
+`run-checks.sh` fails on either.
 
 ### Two invariants
 

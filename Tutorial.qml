@@ -134,7 +134,7 @@ Item {
     x: 0; y: 0
     width: tour.width
     height: tour.hasSpotlight ? Math.max(0, tour.spotlight.y) : tour.height
-    Behavior on height { NumberAnimation { duration: 180; easing.type: Easing.OutCubic } }
+    Behavior on height { NumberAnimation { duration: Style.duration(180); easing.type: Easing.Bezier; easing.bezierCurve: Style.easeOut } }
   }
   Rectangle {
     visible: tour.hasSpotlight
@@ -175,10 +175,10 @@ Item {
     border.color: Qt.rgba(tour.forge.colors.accent.r, tour.forge.colors.accent.g,
                           tour.forge.colors.accent.b, 0.75)
     antialiasing: true
-    Behavior on x { NumberAnimation { duration: 180; easing.type: Easing.OutCubic } }
-    Behavior on y { NumberAnimation { duration: 180; easing.type: Easing.OutCubic } }
-    Behavior on width { NumberAnimation { duration: 180; easing.type: Easing.OutCubic } }
-    Behavior on height { NumberAnimation { duration: 180; easing.type: Easing.OutCubic } }
+    Behavior on x { NumberAnimation { duration: Style.duration(180); easing.type: Easing.Bezier; easing.bezierCurve: Style.easeOut } }
+    Behavior on y { NumberAnimation { duration: Style.duration(180); easing.type: Easing.Bezier; easing.bezierCurve: Style.easeOut } }
+    Behavior on width { NumberAnimation { duration: Style.duration(180); easing.type: Easing.Bezier; easing.bezierCurve: Style.easeOut } }
+    Behavior on height { NumberAnimation { duration: Style.duration(180); easing.type: Easing.Bezier; easing.bezierCurve: Style.easeOut } }
   }
 
   // Swallows every click that is not on the card, so a half-read tour cannot be
@@ -216,7 +216,7 @@ Item {
         return Math.min(tour.width - width - gap, tour.spotlight.x + tour.spotlight.width + gap)
       return Math.max(gap, tour.spotlight.x - width - gap)
     }
-    Behavior on x { NumberAnimation { duration: 180; easing.type: Easing.OutCubic } }
+    Behavior on x { NumberAnimation { duration: Style.duration(180); easing.type: Easing.Bezier; easing.bezierCurve: Style.easeOut } }
 
     tint: tour.forge.surface
     fillAlpha: 0.97
@@ -294,7 +294,7 @@ Item {
             border.color: tour.dontShowAgain
               ? tour.forge.colors.accent
               : Qt.rgba(tour.forge.ink.r, tour.forge.ink.g, tour.forge.ink.b, 0.35)
-            Behavior on color { ColorAnimation { duration: 120 } }
+            Behavior on color { ColorAnimation { duration: Style.duration(120) } }
 
             Text {
               anchors.centerIn: parent
@@ -360,7 +360,7 @@ Item {
               color: index === tour.step
                 ? tour.forge.colors.accent
                 : Qt.rgba(tour.forge.ink.r, tour.forge.ink.g, tour.forge.ink.b, 0.22)
-              Behavior on width { NumberAnimation { duration: 160; easing.type: Easing.OutCubic } }
+              Behavior on width { NumberAnimation { duration: Style.duration(160); easing.type: Easing.Bezier; easing.bezierCurve: Style.easeOut } }
             }
           }
         }

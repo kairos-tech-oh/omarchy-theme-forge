@@ -476,6 +476,11 @@ tools/run-checks.sh
 - `tools/check-export.sh` — what `verify` reports and what `export` refuses,
   against a throwaway `HOME` so it can never see one of the user's own themes
 - `qmllint` over every QML file with `qs.Commons` and `qs.Ui` resolved
+- the shell's current QML conventions: every palette reference is
+  `Commons.Color` (Qt 6.12's own `Color` type shadows a bare one), every
+  animation duration goes through `Style.duration()` so `omarchy toggle
+  animations` stills it, and every `Text` with a non-literal binding declares
+  `textFormat`
 
 ## Tested against a hard-refreshed shell
 

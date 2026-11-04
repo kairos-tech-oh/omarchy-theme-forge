@@ -62,7 +62,7 @@ Item {
       ? surface._withAlpha(surface.edge, surface.hovered ? 1.0 : 0.75)
       : "transparent"
 
-    Behavior on border.color { ColorAnimation { duration: Style.duration(120) } }
+    Behavior on border.color { ColorAnimation { duration: (Style.duration ? Style.duration(120) : 120) } }
 
     Rectangle {
       anchors.fill: parent
@@ -73,7 +73,7 @@ Item {
         Qt.darker(surface.tint, surface.pressed ? 1.10 : (surface.hovered ? 1.18 : 1.28)),
         surface._alpha)
 
-      Behavior on color { ColorAnimation { duration: Style.duration(120) } }
+      Behavior on color { ColorAnimation { duration: (Style.duration ? Style.duration(120) : 120) } }
     }
 
     // The two inner rings. Their alphas scale with the fill's, so turning the

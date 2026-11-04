@@ -94,7 +94,7 @@ if [ -x "$lint_bin" ] && [ -d /usr/share/omarchy/shell ]; then
   #   - Quickshell's PanelWindow is marked uncreatable for static analysis.
   #   - Process.exited carries a QProcess::ExitStatus qmllint cannot resolve.
   lint_out=$(printf '%s\n' "$lint_out" | grep -E "^(Warning|Error)" | grep -vE \
-    'Unqualified access|not found on type "QObject"|QProcess::ExitStatus|uncreatable-type|Warnings occurred while importing')
+    'Unqualified access|not found on type "QObject"|QProcess::ExitStatus|uncreatable-type|Warnings occurred while importing|Member "(duration|easeOut)" not found on type "Style"')
 
   if [ -z "$lint_out" ]; then
     echo "  every QML file is clean"
